@@ -1,11 +1,11 @@
 // src/database/db.ts
-import { createRxDatabase, addRxPlugin } from 'rxdb';
+import { createRxDatabase, addRxPlugin, removeRxDatabase } from 'rxdb';
 import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
 import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
 import { menuSchema, ticketSchema } from './schemas';
 
-// Enable RxDB dev mode for helpful error messages
+// Enable RxDB dev mode for helpful error messages during development
 if (import.meta.env.DEV) {
   addRxPlugin(RxDBDevModePlugin);
 }
@@ -21,8 +21,7 @@ export const getDatabase = async () => {
       // Wrap the local storage engine with the strict schema validator
       storage: wrappedValidateAjvStorage({
         storage: getRxStorageDexie()
-      }),
-      ignoreDuplicate: true
+      })
     });
 
     await db.addCollections({
