@@ -51,8 +51,8 @@ export const getDatabase = async () => {
       ]);
     }
 
-    return db; // <-- ADD THIS LINE
-  }; // <-- ADD THIS BRACKET
+    return db;
+  };
 
   dbPromise = createDB();
   return dbPromise;
