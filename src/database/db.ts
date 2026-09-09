@@ -1,5 +1,5 @@
 // src/database/db.ts
-import { createRxDatabase, addRxPlugin, removeRxDatabase } from 'rxdb';
+import { createRxDatabase, addRxPlugin } from 'rxdb';
 import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
 import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
