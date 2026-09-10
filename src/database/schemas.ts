@@ -1,5 +1,3 @@
-// src/database/schemas.ts
-
 export const menuSchema = {
   version: 0,
   primaryKey: 'productId',
@@ -42,17 +40,19 @@ export const ticketSchema = {
     ticketId: { type: 'string', maxLength: 100 },
     status: { 
       type: 'string', 
-      // OPEN = currently building, PAID = finished but not synced, SYNCED = uploaded to cloud
       enum: ['OPEN', 'PAID', 'SYNCED', 'FAILED'] 
     },
     createdAt: { type: 'number' },
+    customerName: { type: 'string' },
+    orderType: { type: 'string' },
     items: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           productId: { type: 'string' },
-          modifiers: { type: 'array' }, // Array of selected modifier objects
+          name: { type: 'string' },
+          modifiers: { type: 'array' },
           lineTotal: { type: 'number' }
         }
       }

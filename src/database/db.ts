@@ -17,7 +17,7 @@ export const getDatabase = async () => {
 
   const createDB = async () => {
     const db = await createRxDatabase({
-      name: 'cafeposdb',
+      name: 'cafepos_v2',
       // Wrap the local storage engine with the strict schema validator
       storage: wrappedValidateAjvStorage({
         storage: getRxStorageDexie()
