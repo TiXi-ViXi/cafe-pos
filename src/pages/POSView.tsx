@@ -63,20 +63,31 @@ export default function POSView() {
     
     try {
       const db = await getDatabase();
-      // Adjust these field names if your ticketSchema requires different ones
-      await db.tickets.insert({
-        id: crypto.randomUUID(),
-        timestamp: new Date().toISOString(),
-        items: cart,
-        total: parseFloat(currentTotal)
+      
+      // Format the cart items to match the strict schema requirements
+      const formattedItems = cart.map(item => {
+        const itemModTotal = item.modifiers.reduce((mSum, m) => mSum + m.priceDelta, 0);
+        return {
+          productId: item.product.productId,
+          modifiers: item.modifiers,
+          lineTotal: item.product.price + itemModTotal
+        };
       });
+
+      // Insert matching exact schema fields
+      await db.tickets.insert({
+        ticketId: crypto.randomUUID(),
+        status: 'PAID',
+        createdAt: Date.now(),
+        items: formattedItems,
+        grossTotal: parseFloat(currentTotal)
+      });
+      
       setCart([]);
-      alert('Payment Successful & Ticket Saved to Database!');
-    } catch (err) {
+      alert('Payment Successful & Ticket Saved offline!');
+    } catch (err: any) {
       console.error("Ticket save error:", err);
-      // Fallback if schema doesn't perfectly match yet
-      setCart([]);
-      alert('Payment Successful! (Check console for schema warnings)');
+      alert(`Payment Failed: ${err.message}`);
     }
   };
 
@@ -95,8 +106,11 @@ export default function POSView() {
           <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
           ONLINE
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-4">
           <span>✓ Cloud Synced</span>
+          <a href="#/admin" className="bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded border border-gray-600 transition">
+            Admin Panel ⚙️
+          </a>
         </div>
       </div>
 
