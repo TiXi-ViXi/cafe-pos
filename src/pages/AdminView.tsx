@@ -21,7 +21,6 @@ export default function AdminView() {
   
   const categoryList = settings.categories.split(',').map((c: string) => c.trim());
 
-  // Product Form State
   const [editId, setEditId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newPrice, setNewPrice] = useState('');
@@ -31,7 +30,6 @@ export default function AdminView() {
   const [modName, setModName] = useState('');
   const [modPrice, setModPrice] = useState('');
 
-  // Floor Plan Builder State
   const [newTableName, setNewTableName] = useState('');
   const [newTableShape, setNewTableShape] = useState<'rect'|'circle'>('rect');
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -55,7 +53,6 @@ export default function AdminView() {
     alert('Store Configuration & Floor Plan Saved!');
   };
 
-  // Drag and Drop Logic
   const addTable = () => {
     if(!newTableName) return;
     setSettings({
@@ -69,18 +66,22 @@ export default function AdminView() {
     setSettings({ ...settings, tables: settings.tables.filter((t: any) => t.id !== id) });
   };
 
-  const startDrag = (e: React.MouseEvent, id: string) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    setDragState({ id, offX: e.clientX - rect.left, offY: e.clientY - rect.top });
+  const startDrag = (e: React.MouseEvent | React.TouchEvent, id: string) => {
+    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setDragState({ id, offX: clientX - rect.left, offY: clientY - rect.top });
   };
 
-  const onDragMove = (e: React.MouseEvent) => {
+  const onDragMove = (e: React.MouseEvent | React.TouchEvent) => {
     if (!dragState || !canvasRef.current) return;
+    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
     const parent = canvasRef.current.getBoundingClientRect();
-    let newX = ((e.clientX - parent.left - dragState.offX) / parent.width) * 100;
-    let newY = ((e.clientY - parent.top - dragState.offY) / parent.height) * 100;
     
-    // Keep inside boundaries
+    let newX = ((clientX - parent.left - dragState.offX) / parent.width) * 100;
+    let newY = ((clientY - parent.top - dragState.offY) / parent.height) * 100;
+    
     newX = Math.max(0, Math.min(newX, 90));
     newY = Math.max(0, Math.min(newY, 90));
 
@@ -92,7 +93,6 @@ export default function AdminView() {
 
   const endDrag = () => setDragState(null);
 
-  // Sync Logic
   const handleSync = async () => {
     setIsSyncing(true);
     try {
@@ -109,7 +109,6 @@ export default function AdminView() {
     setIsSyncing(false);
   };
 
-  // Image Upload Logic
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -169,7 +168,6 @@ export default function AdminView() {
 
   return (
     <div className="p-4 md:p-8 bg-[#f4f5f7] min-h-screen text-gray-800 font-sans flex flex-col gap-6 select-none">
-      {/* Product Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white p-6 rounded-2xl w-full max-w-lg shadow-2xl border border-gray-100 max-h-[90vh] overflow-y-auto flex flex-col gap-5">
@@ -216,16 +214,15 @@ export default function AdminView() {
         </div>
       )}
 
-      {/* Admin Header */}
       <header className="bg-white px-6 py-4 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center border border-gray-200 shadow-sm gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
-          <h1 className="text-lg md:text-xl font-black text-gray-900">Admin Dashboard</h1>
-          <div className="flex gap-2 bg-gray-100 p-1 rounded-lg">
-            <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === 'dashboard' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Database</button>
-            <button onClick={() => setActiveTab('settings')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === 'settings' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Store & Floor Plan</button>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 w-full md:w-auto">
+          <h1 className="text-lg md:text-xl font-black text-gray-900">Admin</h1>
+          <div className="flex gap-2 bg-gray-100 p-1 rounded-lg w-full sm:w-auto">
+            <button onClick={() => setActiveTab('dashboard')} className={`flex-1 px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === 'dashboard' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Database</button>
+            <button onClick={() => setActiveTab('settings')} className={`flex-1 px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === 'settings' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Store & Floor Plan</button>
           </div>
         </div>
-        <a href="#/" className="bg-emerald-800 hover:bg-emerald-900 px-4 py-2 rounded-xl font-bold transition text-white text-xs md:text-sm no-underline shadow-sm">← Back to POS</a>
+        <a href="#/" className="bg-emerald-800 hover:bg-emerald-900 px-4 py-2 rounded-xl font-bold transition text-white text-xs md:text-sm no-underline shadow-sm self-end md:self-auto">← Back to POS</a>
       </header>
       
       {activeTab === 'dashboard' ? (
@@ -321,19 +318,17 @@ export default function AdminView() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Menu Categories</label>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Categories (Comma Sep)</label>
                 <input type="text" value={settings.categories} onChange={e => setSettings({...settings, categories: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
               </div>
-              <button onClick={handleSaveSettings} className="mt-4 w-full bg-emerald-800 hover:bg-emerald-900 text-white py-4 rounded-xl text-sm font-extrabold shadow-lg shadow-emerald-800/20 transition duration-200">
-                Save All Changes
-              </button>
+              <button onClick={handleSaveSettings} className="mt-2 w-full bg-emerald-800 text-white py-4 rounded-xl text-sm font-extrabold shadow-md transition">Save Settings</button>
             </div>
           </div>
           
           <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-200 w-full flex flex-col h-full">
-            <h2 className="text-xl font-extrabold text-gray-900 mb-6">Drag & Drop Floor Plan</h2>
+            <h2 className="text-xl font-extrabold text-gray-900 mb-6">Floor Plan Layout</h2>
             <div className="flex gap-3 mb-4 shrink-0">
-              <input type="text" placeholder="Table Name (e.g. T1)" value={newTableName} onChange={e => setNewTableName(e.target.value)} className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
+              <input type="text" placeholder="Name (e.g. T1)" value={newTableName} onChange={e => setNewTableName(e.target.value)} className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
               <select value={newTableShape} onChange={e => setNewTableShape(e.target.value as any)} className="w-28 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium">
                 <option value="rect">Square</option>
                 <option value="circle">Circle</option>
@@ -341,28 +336,30 @@ export default function AdminView() {
               <button onClick={addTable} className="bg-emerald-800 text-white px-5 rounded-xl font-bold shadow-sm hover:bg-emerald-900 transition">Add</button>
             </div>
             
-            {/* Interactive Builder Canvas */}
             <div 
               ref={canvasRef}
               onMouseMove={onDragMove}
+              onTouchMove={onDragMove}
               onMouseUp={endDrag}
+              onTouchEnd={endDrag}
               onMouseLeave={endDrag}
-              className="flex-1 min-h-[400px] bg-gray-100 rounded-xl border-4 border-dashed border-gray-300 relative overflow-hidden mt-2"
+              className="flex-1 min-h-[300px] sm:min-h-[400px] bg-gray-100 rounded-xl border-4 border-dashed border-gray-300 relative overflow-hidden"
             >
-              <span className="absolute top-3 left-4 text-xs font-bold text-gray-400 uppercase tracking-widest pointer-events-none">Click & drag tables to position</span>
+              <span className="absolute top-3 left-4 text-xs font-bold text-gray-400 uppercase tracking-widest pointer-events-none">Drag tables to position</span>
               {(settings.tables || []).map((t: any) => (
                 <div 
                   key={t.id}
                   onMouseDown={(e) => startDrag(e, t.id)}
+                  onTouchStart={(e) => startDrag(e, t.id)}
                   style={{ left: `${t.x}%`, top: `${t.y}%` }}
                   className={`
-                    absolute cursor-move shadow-md flex flex-col items-center justify-center bg-gray-800 text-white border-2 border-gray-600
-                    ${t.shape === 'circle' ? 'rounded-full w-16 h-16' : 'rounded-lg w-20 h-14'}
+                    absolute cursor-move shadow-md flex flex-col items-center justify-center bg-gray-800 text-white border-2 border-gray-600 touch-none
+                    ${t.shape === 'circle' ? 'rounded-full w-14 h-14 sm:w-16 sm:h-16' : 'rounded-lg w-16 h-12 sm:w-20 sm:h-14'}
                     ${dragState?.id === t.id ? 'opacity-70 scale-105 z-10' : 'hover:scale-105'}
                   `}
                 >
-                  <span className="text-xs font-bold pointer-events-none">{t.name}</span>
-                  <button onClick={(e) => { e.stopPropagation(); removeTable(t.id); }} className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-5 h-5 text-[10px] flex items-center justify-center shadow">✕</button>
+                  <span className="text-xs sm:text-sm font-bold pointer-events-none">{t.name}</span>
+                  <button onClick={(e) => { e.stopPropagation(); removeTable(t.id); }} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 text-[10px] flex items-center justify-center shadow z-20">✕</button>
                 </div>
               ))}
             </div>
