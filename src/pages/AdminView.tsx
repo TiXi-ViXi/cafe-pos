@@ -2,23 +2,22 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { getDatabase } from '../database/db';
 
 export default function AdminView() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'settings' | 'staff'>('dashboard');
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [tickets, setTickets] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  
   const [showAddModal, setShowAddModal] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   
   const [settings, setSettings] = useState(() => {
     const saved = localStorage.getItem('pos_settings');
-    return saved ? JSON.parse(saved) : {
-      storeName: 'BYRON BLISS', branchName: 'Khulna Branch', cashierName: 'Nirvik', currencySymbol: '৳', taxRate: 10, categories: 'Hot Coffee, Iced Coffee, Pastry, Beverage',
-      tables: [{ id: 't1', name: 'Table 1', shape: 'rect', x: 10, y: 10 }]
-    };
+    return saved ? JSON.parse(saved) : { storeName: 'BYRON BLISS', branchName: 'Khulna Branch', currencySymbol: '৳', taxRate: 10, categories: 'Hot Coffee, Iced Coffee, Pastry, Beverage', tables: [{ id: 't1', name: 'Table 1', shape: 'rect', x: 10, y: 10 }] };
   });
   
   const categoryList = settings.categories.split(',').map((c: string) => c.trim());
 
-  // Form State
+  // Product Form States
   const [editId, setEditId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newPrice, setNewPrice] = useState('');
@@ -29,7 +28,12 @@ export default function AdminView() {
   const [modName, setModName] = useState('');
   const [modPrice, setModPrice] = useState('');
 
-  // Map State
+  // Staff Form States
+  const [newUsername, setNewUsername] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [newRole, setNewRole] = useState('employee');
+
+  // Map States
   const [newTableName, setNewTableName] = useState('');
   const [newTableShape, setNewTableShape] = useState<'rect'|'circle'>('rect');
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -38,148 +42,92 @@ export default function AdminView() {
   useEffect(() => {
     const loadData = async () => {
       const db = await getDatabase();
-      const items = await db.menu.find().exec();
+      const items = await db.menu.find().exec(); 
       setMenuItems(items.map((item: any) => item.toJSON()));
+      
       const savedTickets = await db.tickets.find().exec();
       const parsedTickets = savedTickets.map((t: any) => t.toJSON());
       parsedTickets.sort((a: any, b: any) => b.createdAt - a.createdAt);
       setTickets(parsedTickets);
+      
+      const savedUsers = await db.users.find().exec(); 
+      setUsers(savedUsers.map((u: any) => u.toJSON()));
     };
     loadData();
   }, []);
 
-  // --- REPORTING LOGIC ---
   const paidTickets = useMemo(() => tickets.filter(t => t.status === 'PAID' || t.status === 'SYNCED'), [tickets]);
   
   const stats = useMemo(() => {
     let gross = 0; let totalCost = 0; let orders = paidTickets.length;
     const itemPerf: any = {}; const daily: any = {};
-
+    
     paidTickets.forEach(t => {
-      gross += t.grossTotal;
-      totalCost += (t.totalCost || 0);
-      
+      gross += t.grossTotal; totalCost += (t.totalCost || 0);
       const dateStr = new Date(t.createdAt).toLocaleDateString();
       if (!daily[dateStr]) daily[dateStr] = { orders: 0, gross: 0, cost: 0 };
-      daily[dateStr].orders += 1;
-      daily[dateStr].gross += t.grossTotal;
-      daily[dateStr].cost += (t.totalCost || 0);
-
+      daily[dateStr].orders += 1; daily[dateStr].gross += t.grossTotal; daily[dateStr].cost += (t.totalCost || 0);
+      
       t.items.forEach((i: any) => {
         if (!itemPerf[i.name]) itemPerf[i.name] = { qty: 0, rev: 0 };
-        itemPerf[i.name].qty += 1;
-        itemPerf[i.name].rev += i.lineTotal;
+        itemPerf[i.name].qty += 1; itemPerf[i.name].rev += i.lineTotal;
       });
     });
-
-    const netSales = gross / (1 + (settings.taxRate / 100));
-    const tax = gross - netSales;
+    
+    const netSales = gross / (1 + (settings.taxRate / 100)); 
+    const tax = gross - netSales; 
     const profit = netSales - totalCost;
-
-    return {
-      gross, netSales, tax, totalCost, profit, orders,
-      daily: Object.entries(daily).sort((a,b) => new Date(b[0]).getTime() - new Date(a[0]).getTime()),
-      topItems: Object.entries(itemPerf).sort((a: any, b: any) => b[1].qty - a[1].qty).slice(0, 5)
+    
+    return { 
+      gross, netSales, tax, totalCost, profit, orders, 
+      daily: Object.entries(daily).sort((a,b) => new Date(b[0]).getTime() - new Date(a[0]).getTime()), 
+      topItems: Object.entries(itemPerf).sort((a: any, b: any) => b[1].qty - a[1].qty).slice(0, 5) 
     };
   }, [paidTickets, settings.taxRate]);
-  // -----------------------
 
-  const handleSaveSettings = () => {
-    localStorage.setItem('pos_settings', JSON.stringify(settings));
-    alert('Settings Saved!');
+  const handleSaveSettings = () => { 
+    localStorage.setItem('pos_settings', JSON.stringify(settings)); 
+    alert('Settings Saved!'); 
   };
 
-  const addTable = () => {
-    if(!newTableName) return;
-    setSettings({ ...settings, tables: [...(settings.tables || []), { id: crypto.randomUUID(), name: newTableName, shape: newTableShape, x: 40, y: 40 }] });
-    setNewTableName('');
+  const handleCreateUser = async () => {
+    if (!newUsername || !newPin) return alert('Name and PIN required');
+    if (users.find(u => u.pin === newPin)) return alert('PIN already in use. Must be unique.');
+    const db = await getDatabase();
+    const newUser = { userId: `user_${Date.now()}`, username: newUsername, pin: newPin, role: newRole };
+    await db.users.insert(newUser);
+    setUsers(prev => [...prev, newUser]);
+    setNewUsername(''); setNewPin('');
   };
+
+  const handleDeleteUser = async (userId: string, role: string) => {
+    if (role === 'admin' && users.filter(u => u.role === 'admin').length === 1) return alert('Cannot delete the last admin account.');
+    if (!window.confirm('Delete user?')) return;
+    const db = await getDatabase(); await db.users.find({ selector: { userId } }).remove();
+    setUsers(prev => prev.filter(u => u.userId !== userId));
+  };
+
+  const addTable = () => { if(!newTableName) return; setSettings({ ...settings, tables: [...(settings.tables || []), { id: crypto.randomUUID(), name: newTableName, shape: newTableShape, x: 40, y: 40 }] }); setNewTableName(''); };
   const removeTable = (id: string) => setSettings({ ...settings, tables: settings.tables.filter((t: any) => t.id !== id) });
-
-  const startDrag = (e: React.MouseEvent | React.TouchEvent, id: string) => {
-    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setDragState({ id, offX: clientX - rect.left, offY: clientY - rect.top });
-  };
-
-  const onDragMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!dragState || !canvasRef.current) return;
-    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
-    const parent = canvasRef.current.getBoundingClientRect();
-    let newX = ((clientX - parent.left - dragState.offX) / parent.width) * 100;
-    let newY = ((clientY - parent.top - dragState.offY) / parent.height) * 100;
-    newX = Math.max(0, Math.min(newX, 90)); newY = Math.max(0, Math.min(newY, 90));
-    setSettings({ ...settings, tables: settings.tables.map((t: any) => t.id === dragState.id ? { ...t, x: newX, y: newY } : t) });
-  };
+  
+  const startDrag = (e: React.MouseEvent | React.TouchEvent, id: string) => { const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX; const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY; const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); setDragState({ id, offX: clientX - rect.left, offY: clientY - rect.top }); };
+  const onDragMove = (e: React.MouseEvent | React.TouchEvent) => { if (!dragState || !canvasRef.current) return; const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX; const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY; const parent = canvasRef.current.getBoundingClientRect(); let newX = ((clientX - parent.left - dragState.offX) / parent.width) * 100; let newY = ((clientY - parent.top - dragState.offY) / parent.height) * 100; newX = Math.max(0, Math.min(newX, 90)); newY = Math.max(0, Math.min(newY, 90)); setSettings({ ...settings, tables: settings.tables.map((t: any) => t.id === dragState.id ? { ...t, x: newX, y: newY } : t) }); };
   const endDrag = () => setDragState(null);
 
   const handleSync = async () => {
     setIsSyncing(true);
-    try {
-      const db = await getDatabase();
-      const pendingTickets = await db.tickets.find({ selector: { status: 'PAID' } }).exec();
-      if (pendingTickets.length === 0) { alert('All synced!'); setIsSyncing(false); return; }
-      for (const ticket of pendingTickets) { await ticket.incrementalPatch({ status: 'SYNCED' }); }
-      const updatedTickets = await db.tickets.find().exec();
-      const parsedUpdated = updatedTickets.map((t: any) => t.toJSON());
-      parsedUpdated.sort((a: any, b: any) => b.createdAt - a.createdAt);
-      setTickets(parsedUpdated);
-      alert(`Synced ${pendingTickets.length} tickets!`);
-    } catch (err) { alert('Sync failed.'); }
-    setIsSyncing(false);
+    try { const db = await getDatabase(); const pendingTickets = await db.tickets.find({ selector: { status: 'PAID' } }).exec(); if (pendingTickets.length === 0) { alert('All synced!'); setIsSyncing(false); return; } for (const ticket of pendingTickets) { await ticket.incrementalPatch({ status: 'SYNCED' }); } const updatedTickets = await db.tickets.find().exec(); const parsedUpdated = updatedTickets.map((t: any) => t.toJSON()); parsedUpdated.sort((a: any, b: any) => b.createdAt - a.createdAt); setTickets(parsedUpdated); alert(`Synced ${pendingTickets.length} tickets!`); } catch (err) { alert('Sync failed.'); } setIsSyncing(false);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas'); canvas.width = 300; canvas.height = 300;
-        const ctx = canvas.getContext('2d'); if (!ctx) return;
-        const minDim = Math.min(img.width, img.height);
-        ctx.drawImage(img, (img.width - minDim) / 2, (img.height - minDim) / 2, minDim, minDim, 0, 0, 300, 300);
-        setNewImage(canvas.toDataURL('image/jpeg', 0.8));
-      };
-      img.src = event.target?.result as string;
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const openEditModal = (item: any) => {
-    setEditId(item.productId); setNewName(item.name); setNewPrice(item.price.toString()); setNewCost(item.cost?.toString() || '0');
-    setNewCategory(item.category); setNewImage(item.image || ''); setTempMods(item.modifierGroups?.[0]?.options || []); setShowAddModal(true);
-  };
-
-  const resetForm = () => {
-    setShowAddModal(false); setEditId(null); setNewName(''); setNewPrice(''); setNewCost(''); setNewImage(''); setTempMods([]);
-  };
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { const img = new Image(); img.onload = () => { const canvas = document.createElement('canvas'); canvas.width = 300; canvas.height = 300; const ctx = canvas.getContext('2d'); if (!ctx) return; const minDim = Math.min(img.width, img.height); ctx.drawImage(img, (img.width - minDim) / 2, (img.height - minDim) / 2, minDim, minDim, 0, 0, 300, 300); setNewImage(canvas.toDataURL('image/jpeg', 0.8)); }; img.src = event.target?.result as string; }; reader.readAsDataURL(file); };
+  const openEditModal = (item: any) => { setEditId(item.productId); setNewName(item.name); setNewPrice(item.price.toString()); setNewCost(item.cost?.toString() || '0'); setNewCategory(item.category); setNewImage(item.image || ''); setTempMods(item.modifierGroups?.[0]?.options || []); setShowAddModal(true); };
+  const resetForm = () => { setShowAddModal(false); setEditId(null); setNewName(''); setNewPrice(''); setNewCost(''); setNewImage(''); setTempMods([]); };
 
   const handleSaveProduct = async () => {
-    if (!newName || !newPrice) return;
-    const db = await getDatabase();
-    const modifierGroups = tempMods.length > 0 ? [{ groupId: crypto.randomUUID(), name: "Custom Options", options: tempMods.map(m => ({ modId: (m as any).modId || crypto.randomUUID(), name: m.name, priceDelta: m.priceDelta })) }] : [];
-    try {
-      if (editId) {
-        const doc = await db.menu.findOne({ selector: { productId: editId } }).exec();
-        await doc.patch({ name: newName, price: parseFloat(newPrice), cost: parseFloat(newCost)||0, category: newCategory || categoryList[0], image: newImage, modifierGroups });
-        setMenuItems(prev => prev.map(p => p.productId === editId ? { ...p, name: newName, price: parseFloat(newPrice), cost: parseFloat(newCost)||0, category: newCategory, image: newImage, modifierGroups } : p));
-      } else {
-        const newItem = { productId: `prod_${Date.now()}`, name: newName, price: parseFloat(newPrice), cost: parseFloat(newCost)||0, category: newCategory || categoryList[0], image: newImage, modifierGroups };
-        await db.menu.insert(newItem); setMenuItems(prev => [...prev, newItem]);
-      }
-      resetForm();
-    } catch (err) { console.error(err); }
+    if (!newName || !newPrice) return; const db = await getDatabase(); const modifierGroups = tempMods.length > 0 ? [{ groupId: crypto.randomUUID(), name: "Custom Options", options: tempMods.map(m => ({ modId: (m as any).modId || crypto.randomUUID(), name: m.name, priceDelta: m.priceDelta })) }] : [];
+    try { if (editId) { const doc = await db.menu.findOne({ selector: { productId: editId } }).exec(); await doc.patch({ name: newName, price: parseFloat(newPrice), cost: parseFloat(newCost)||0, category: newCategory || categoryList[0], image: newImage, modifierGroups }); setMenuItems(prev => prev.map(p => p.productId === editId ? { ...p, name: newName, price: parseFloat(newPrice), cost: parseFloat(newCost)||0, category: newCategory, image: newImage, modifierGroups } : p)); } else { const newItem = { productId: `prod_${Date.now()}`, name: newName, price: parseFloat(newPrice), cost: parseFloat(newCost)||0, category: newCategory || categoryList[0], image: newImage, modifierGroups }; await db.menu.insert(newItem); setMenuItems(prev => [...prev, newItem]); } resetForm(); } catch (err) { console.error(err); }
   };
-
-  const handleDeleteProduct = async (productId: string) => {
-    if (!window.confirm('Delete item?')) return;
-    const db = await getDatabase(); await db.menu.find({ selector: { productId } }).remove();
-    setMenuItems(prev => prev.filter(p => p.productId !== productId));
-  };
+  const handleDeleteProduct = async (productId: string) => { if (!window.confirm('Delete item?')) return; const db = await getDatabase(); await db.menu.find({ selector: { productId } }).remove(); setMenuItems(prev => prev.filter(p => p.productId !== productId)); };
 
   return (
     <div className="p-4 md:p-8 bg-[#f4f5f7] min-h-screen text-gray-800 font-sans flex flex-col gap-6 select-none">
@@ -243,6 +191,7 @@ export default function AdminView() {
           <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-full sm:w-auto overflow-x-auto">
             <button onClick={() => setActiveTab('dashboard')} className={`flex-1 px-4 py-1.5 rounded-md text-xs font-bold transition ${activeTab === 'dashboard' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Database</button>
             <button onClick={() => setActiveTab('reports')} className={`flex-1 px-4 py-1.5 rounded-md text-xs font-bold transition ${activeTab === 'reports' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Reports</button>
+            <button onClick={() => setActiveTab('staff')} className={`flex-1 px-4 py-1.5 rounded-md text-xs font-bold transition ${activeTab === 'staff' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Staff</button>
             <button onClick={() => setActiveTab('settings')} className={`flex-1 px-4 py-1.5 rounded-md text-xs font-bold transition ${activeTab === 'settings' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Settings</button>
           </div>
         </div>
@@ -317,6 +266,37 @@ export default function AdminView() {
                 {stats.topItems.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">No sales data yet.</p>}
               </div>
             </div>
+          </div>
+        </div>
+      ) : activeTab === 'staff' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-200">
+             <h2 className="text-lg font-extrabold text-gray-900 mb-4">Create Employee PIN</h2>
+             <div className="flex flex-col gap-4">
+                <input type="text" placeholder="Employee Name" value={newUsername} onChange={e => setNewUsername(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
+                <div className="grid grid-cols-2 gap-3">
+                   <input type="password" placeholder="4-Digit Login PIN" value={newPin} onChange={e => setNewPin(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
+                   <select value={newRole} onChange={e => setNewRole(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium text-gray-700">
+                     <option value="employee">Employee (POS Only)</option>
+                     <option value="admin">Admin (Full Access)</option>
+                   </select>
+                </div>
+                <button onClick={handleCreateUser} className="bg-emerald-800 text-white py-3 rounded-xl font-extrabold shadow-md transition">Create Account</button>
+             </div>
+          </div>
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-200">
+             <h2 className="text-lg font-extrabold text-gray-900 mb-4">Active Staff</h2>
+             <div className="flex flex-col gap-3">
+                {users.map(u => (
+                  <div key={u.userId} className="bg-gray-50 p-4 rounded-xl border border-gray-200/60 flex justify-between items-center">
+                    <div className="flex flex-col">
+                      <span className="font-extrabold text-gray-900 text-sm">{u.username}</span>
+                      <span className={`text-[10px] font-bold uppercase mt-1 w-max px-2 py-0.5 rounded ${u.role === 'admin' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>{u.role}</span>
+                    </div>
+                    <button onClick={() => handleDeleteUser(u.userId, u.role)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg font-bold text-xs border border-red-200 transition">Remove</button>
+                  </div>
+                ))}
+             </div>
           </div>
         </div>
       ) : activeTab === 'dashboard' ? (
@@ -397,11 +377,7 @@ export default function AdminView() {
                   <input type="text" value={settings.branchName} onChange={e => setSettings({...settings, branchName: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium" />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2 sm:col-span-1">
-                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Cashier</label>
-                  <input type="text" value={settings.cashierName} onChange={e => setSettings({...settings, cashierName: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium" />
-                </div>
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Currency</label>
                   <input type="text" value={settings.currencySymbol} onChange={e => setSettings({...settings, currencySymbol: e.target.value})} className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium text-center" />

@@ -63,3 +63,17 @@ export const ticketSchema = {
   },
   required: ['ticketId', 'status', 'createdAt', 'grossTotal']
 } as const;
+
+// NEW: User Schema for Login
+export const userSchema = {
+  version: 0,
+  primaryKey: 'userId',
+  type: 'object',
+  properties: {
+    userId: { type: 'string', maxLength: 100 },
+    username: { type: 'string' },
+    pin: { type: 'string' },
+    role: { type: 'string', enum: ['admin', 'employee'] }
+  },
+  required: ['userId', 'username', 'pin', 'role']
+} as const;

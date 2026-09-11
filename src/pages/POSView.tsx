@@ -9,6 +9,9 @@ interface CartItem {
 }
 
 export default function POSView() {
+  // 1. Get the currently logged in user
+  const currentUser = JSON.parse(localStorage.getItem('pos_user') || '{}');
+  
   const [menuItems, setMenuItems] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -156,6 +159,12 @@ export default function POSView() {
     if (window.innerWidth < 1024) setMobileTab('cart');
   };
 
+  // 2. Add Logout function
+  const handleLogout = () => {
+    localStorage.removeItem('pos_user');
+    window.location.reload();
+  };
+
   const subtotal = cart.reduce((sum, item) => sum + item.product.price + item.modifiers.reduce((mSum, m) => mSum + m.priceDelta, 0), 0);
   const tax = subtotal * (settings.taxRate / 100);
   const totalWithTax = (subtotal + tax).toFixed(2);
@@ -183,7 +192,13 @@ export default function POSView() {
                 Map {openTickets.length > 0 && <span className="bg-red-500 text-white text-[8px] sm:text-[10px] px-1.5 py-0.5 rounded-full">{openTickets.length}</span>}
               </button>
             </div>
-            <a href="#/admin" className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 sm:px-4 py-1.5 rounded-lg font-bold text-[10px] sm:text-sm border border-gray-200">⚙️</a>
+            
+            {/* 3. Hide Admin Button if Employee, Show Logout */}
+            {currentUser.role === 'admin' && (
+              <a href="#/admin" className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 sm:px-4 py-1.5 rounded-lg font-bold text-[10px] sm:text-sm border border-gray-200">⚙️</a>
+            )}
+            <button onClick={handleLogout} className="bg-red-50 hover:bg-red-100 text-red-600 px-2 sm:px-4 py-1.5 rounded-lg font-bold text-[10px] sm:text-sm border border-red-200 transition">Logout</button>
+            
           </div>
         </div>
 
@@ -344,7 +359,10 @@ export default function POSView() {
               <h2 className="text-xl font-black uppercase tracking-wider text-emerald-900">{settings.storeName}</h2>
               <p className="text-xs mt-1 text-gray-500">{settings.branchName}</p>
               <p className="text-xs mt-2 text-gray-400">{new Date(receiptData.createdAt).toLocaleString()}</p>
-              <p className="text-xs mt-1 text-gray-600 font-bold">Customer: {receiptData.customerName} ({receiptData.orderType})</p>
+              
+              {/* 4. Display Cashier Name */}
+              <p className="text-xs mt-1 text-gray-600 font-bold">Cashier: {currentUser.username} | {receiptData.customerName} ({receiptData.orderType})</p>
+              
               {receiptData.tableNumber && <p className="text-xs mt-1 text-gray-600 font-bold">Table: {receiptData.tableNumber}</p>}
             </div>
             <div className="flex flex-col gap-3 mb-6 max-h-48 overflow-y-auto print:max-h-none print:overflow-visible">
