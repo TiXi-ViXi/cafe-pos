@@ -315,7 +315,9 @@ export default function AdminView() {
                     <div className="flex flex-col">
                       <span className="font-extrabold text-emerald-800 text-sm">{settings.currencySymbol}{ticket.grossTotal.toFixed(2)}</span>
                       <span className="text-gray-400 text-[10px] mt-0.5">{new Date(ticket.createdAt).toLocaleString()}</span>
-                      {ticket.customerName && <span className="text-xs text-gray-600 font-medium mt-1">👤 {ticket.customerName} {ticket.tableNumber && `| T: ${ticket.tableNumber}`}</span>}
+                      
+                      {/* NEW: Displays the cashier who took the order in the Admin dashboard */}
+                      {ticket.customerName && <span className="text-xs text-gray-600 font-medium mt-1">👤 {ticket.customerName} {ticket.tableNumber && `| T: ${ticket.tableNumber}`} • 👨‍🍳 By: {ticket.cashierName || 'Unknown'}</span>}
                     </div>
                     <div className={`text-[10px] px-2 py-1 rounded-full font-bold ${ticket.status === 'SYNCED' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
                       {ticket.status}

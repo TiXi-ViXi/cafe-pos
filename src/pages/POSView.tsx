@@ -9,7 +9,6 @@ interface CartItem {
 }
 
 export default function POSView() {
-  // 1. Get the currently logged in user
   const currentUser = JSON.parse(localStorage.getItem('pos_user') || '{}');
   
   const [menuItems, setMenuItems] = useState<Product[]>([]);
@@ -113,6 +112,8 @@ export default function POSView() {
         status: isPaid ? 'PAID' : 'OPEN',
         createdAt: Date.now(),
         customerName: customerName || 'Walk-in Customer',
+        cashierId: currentUser.userId,
+        cashierName: currentUser.username,
         orderType,
         tableNumber: selectedTable,
         items: formattedItems,
@@ -137,7 +138,14 @@ export default function POSView() {
 
   const loadActiveTable = (tableId: string) => {
     const activeTicket = openTickets.find(t => t.tableNumber === tableId);
+    
     if (activeTicket) {
+      // DATA ISOLATION: Prevent employees from opening a table owned by someone else
+      if (currentUser.role !== 'admin' && activeTicket.cashierId !== currentUser.userId) {
+        alert(`ACCESS DENIED: Table ${tableId} is actively being served by ${activeTicket.cashierName}.`);
+        return;
+      }
+
       const reconstructedCart = activeTicket.items.map((tItem: any) => {
         const menuProduct = menuItems.find(p => p.productId === tItem.productId);
         return {
@@ -159,7 +167,6 @@ export default function POSView() {
     if (window.innerWidth < 1024) setMobileTab('cart');
   };
 
-  // 2. Add Logout function
   const handleLogout = () => {
     localStorage.removeItem('pos_user');
     window.location.reload();
@@ -169,6 +176,9 @@ export default function POSView() {
   const tax = subtotal * (settings.taxRate / 100);
   const totalWithTax = (subtotal + tax).toFixed(2);
   const filteredItems = menuItems.filter(item => (selectedCategory === 'All' || item.category === selectedCategory) && item.name.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  // Calculate my active tickets for the counter bubble
+  const myActiveTickets = openTickets.filter(t => currentUser.role === 'admin' || t.cashierId === currentUser.userId);
 
   return (
     <>
@@ -189,11 +199,10 @@ export default function POSView() {
             <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
               <button onClick={() => setMainView('menu')} className={`px-2 sm:px-4 py-1 sm:py-1.5 rounded text-[10px] sm:text-sm font-bold transition ${mainView === 'menu' ? 'bg-white shadow-sm text-emerald-800' : 'text-gray-500'}`}>Menu</button>
               <button onClick={() => setMainView('floorplan')} className={`px-2 sm:px-4 py-1 sm:py-1.5 rounded text-[10px] sm:text-sm font-bold transition flex items-center gap-1 sm:gap-2 ${mainView === 'floorplan' ? 'bg-white shadow-sm text-emerald-800' : 'text-gray-500'}`}>
-                Map {openTickets.length > 0 && <span className="bg-red-500 text-white text-[8px] sm:text-[10px] px-1.5 py-0.5 rounded-full">{openTickets.length}</span>}
+                Map {myActiveTickets.length > 0 && <span className="bg-red-500 text-white text-[8px] sm:text-[10px] px-1.5 py-0.5 rounded-full">{myActiveTickets.length}</span>}
               </button>
             </div>
             
-            {/* 3. Hide Admin Button if Employee, Show Logout */}
             {currentUser.role === 'admin' && (
               <a href="#/admin" className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 sm:px-4 py-1.5 rounded-lg font-bold text-[10px] sm:text-sm border border-gray-200">⚙️</a>
             )}
@@ -241,20 +250,29 @@ export default function POSView() {
                 <h2 className="text-lg sm:text-2xl font-black text-gray-400 uppercase tracking-widest absolute top-4 left-4 z-10 pointer-events-none">Floor Plan</h2>
                 <div className="absolute inset-0 m-4 sm:m-6 pt-12">
                     {(settings.tables || []).map((table: any) => {
-                      const isOccupied = openTickets.some(t => t.tableNumber === table.name);
+                      const occupiedTicket = openTickets.find(t => t.tableNumber === table.name);
+                      const isOccupied = !!occupiedTicket;
+                      const isMine = isOccupied && (occupiedTicket.cashierId === currentUser.userId || currentUser.role === 'admin');
                       const isSelected = selectedTable === table.name;
+                      
                       return (
                         <button 
                           key={table.id} onClick={() => loadActiveTable(table.name)} style={{ left: `${table.x}%`, top: `${table.y}%` }}
                           className={`
                             absolute flex flex-col items-center justify-center shadow-lg transition-transform transform hover:scale-105 border-2 sm:border-4
                             ${table.shape === 'circle' ? 'rounded-full w-14 h-14 sm:w-24 sm:h-24' : 'rounded-xl w-16 h-12 sm:w-32 sm:h-20'}
-                            ${isOccupied ? 'bg-red-500 border-red-700 text-white' : 'bg-emerald-500 border-emerald-700 text-white'}
+                            ${isOccupied 
+                                ? isMine 
+                                    ? 'bg-red-500 border-red-700 text-white' // Red if it's my table
+                                    : 'bg-gray-400 border-gray-500 text-gray-100' // Gray if it's locked by another employee
+                                : 'bg-emerald-500 border-emerald-700 text-white'}
                             ${isSelected ? 'ring-2 sm:ring-4 ring-offset-2 sm:ring-offset-4 ring-blue-500 z-10' : ''}
                           `}
                         >
                           <span className="text-xs sm:text-lg font-black">{table.name}</span>
-                          <span className="text-[8px] sm:text-[10px] font-bold sm:mt-1 opacity-80 uppercase">{isOccupied ? 'Active' : 'Free'}</span>
+                          <span className="text-[8px] sm:text-[10px] font-bold sm:mt-1 opacity-80 uppercase">
+                            {isOccupied ? (isMine ? 'Active' : 'Locked') : 'Free'}
+                          </span>
                         </button>
                       );
                     })}
@@ -359,10 +377,7 @@ export default function POSView() {
               <h2 className="text-xl font-black uppercase tracking-wider text-emerald-900">{settings.storeName}</h2>
               <p className="text-xs mt-1 text-gray-500">{settings.branchName}</p>
               <p className="text-xs mt-2 text-gray-400">{new Date(receiptData.createdAt).toLocaleString()}</p>
-              
-              {/* 4. Display Cashier Name */}
               <p className="text-xs mt-1 text-gray-600 font-bold">Cashier: {currentUser.username} | {receiptData.customerName} ({receiptData.orderType})</p>
-              
               {receiptData.tableNumber && <p className="text-xs mt-1 text-gray-600 font-bold">Table: {receiptData.tableNumber}</p>}
             </div>
             <div className="flex flex-col gap-3 mb-6 max-h-48 overflow-y-auto print:max-h-none print:overflow-visible">

@@ -6,30 +6,10 @@ export const menuSchema = {
     productId: { type: 'string', maxLength: 100 },
     name: { type: 'string' },
     price: { type: 'number' },
-    cost: { type: 'number' }, // Added Cost Tracking
+    cost: { type: 'number' },
     category: { type: 'string' },
     image: { type: 'string' },
-    modifierGroups: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          groupId: { type: 'string' },
-          name: { type: 'string' },
-          options: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                modId: { type: 'string' },
-                name: { type: 'string' },
-                priceDelta: { type: 'number' }
-              }
-            }
-          }
-        }
-      }
-    }
+    modifierGroups: { type: 'array', items: { type: 'object', properties: { groupId: { type: 'string' }, name: { type: 'string' }, options: { type: 'array', items: { type: 'object', properties: { modId: { type: 'string' }, name: { type: 'string' }, priceDelta: { type: 'number' } } } } } } }
   },
   required: ['productId', 'name', 'price', 'category']
 } as const;
@@ -43,28 +23,17 @@ export const ticketSchema = {
     status: { type: 'string', enum: ['OPEN', 'PAID', 'SYNCED', 'FAILED'] },
     createdAt: { type: 'number' },
     customerName: { type: 'string' },
+    cashierId: { type: 'string' },
+    cashierName: { type: 'string' },
     orderType: { type: 'string' },
     tableNumber: { type: 'string' },
-    items: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          productId: { type: 'string' },
-          name: { type: 'string' },
-          modifiers: { type: 'array' },
-          lineTotal: { type: 'number' },
-          cost: { type: 'number' } // Added Item Cost Tracking
-        }
-      }
-    },
+    items: { type: 'array', items: { type: 'object', properties: { productId: { type: 'string' }, name: { type: 'string' }, modifiers: { type: 'array' }, lineTotal: { type: 'number' }, cost: { type: 'number' } } } },
     grossTotal: { type: 'number' },
-    totalCost: { type: 'number' } // Added Ticket Cost Tracking
+    totalCost: { type: 'number' }
   },
-  required: ['ticketId', 'status', 'createdAt', 'grossTotal']
+  required: ['ticketId', 'status', 'createdAt', 'grossTotal', 'cashierId', 'cashierName']
 } as const;
 
-// NEW: User Schema for Login
 export const userSchema = {
   version: 0,
   primaryKey: 'userId',

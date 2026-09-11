@@ -15,17 +15,16 @@ export const getDatabase = async () => {
 
   const createDB = async () => {
     const db = await createRxDatabase({
-      name: 'cafepos_v7', // Bumped to v7 for User Accounts
+      name: 'cafepos_v8',
       storage: wrappedValidateAjvStorage({ storage: getRxStorageDexie() })
     });
 
     await db.addCollections({
       menu: { schema: menuSchema },
       tickets: { schema: ticketSchema },
-      users: { schema: userSchema } // NEW: Users collection
+      users: { schema: userSchema }
     });
 
-    // Seed default Admin
     const users = await db.users.find().exec();
     if (users.length === 0) {
       await db.users.insert({ userId: 'admin_1', username: 'Admin', pin: '1234', role: 'admin' });
