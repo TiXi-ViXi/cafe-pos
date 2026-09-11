@@ -6,6 +6,7 @@ export const menuSchema = {
     productId: { type: 'string', maxLength: 100 },
     name: { type: 'string' },
     price: { type: 'number' },
+    cost: { type: 'number' }, // Added Cost Tracking
     category: { type: 'string' },
     image: { type: 'string' },
     modifierGroups: {
@@ -43,7 +44,7 @@ export const ticketSchema = {
     createdAt: { type: 'number' },
     customerName: { type: 'string' },
     orderType: { type: 'string' },
-    tableNumber: { type: 'string' }, // NEW: Table Tracking
+    tableNumber: { type: 'string' },
     items: {
       type: 'array',
       items: {
@@ -52,11 +53,13 @@ export const ticketSchema = {
           productId: { type: 'string' },
           name: { type: 'string' },
           modifiers: { type: 'array' },
-          lineTotal: { type: 'number' }
+          lineTotal: { type: 'number' },
+          cost: { type: 'number' } // Added Item Cost Tracking
         }
       }
     },
-    grossTotal: { type: 'number' }
+    grossTotal: { type: 'number' },
+    totalCost: { type: 'number' } // Added Ticket Cost Tracking
   },
   required: ['ticketId', 'status', 'createdAt', 'grossTotal']
 } as const;

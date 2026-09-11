@@ -15,7 +15,7 @@ export const getDatabase = async () => {
 
   const createDB = async () => {
     const db = await createRxDatabase({
-      name: 'cafepos_v5', // Bumped to v5 for Floor Plan update
+      name: 'cafepos_v6', // Bumped to v6 for Reports/Cost Tracking
       storage: wrappedValidateAjvStorage({ storage: getRxStorageDexie() })
     });
 
@@ -28,11 +28,11 @@ export const getDatabase = async () => {
     if (menuItems.length === 0) {
       await db.menu.bulkInsert([
         { 
-          productId: 'prod_1', name: 'Latte', price: 4.50, category: 'Hot Coffee', image: '',
+          productId: 'prod_1', name: 'Latte', price: 4.50, cost: 1.20, category: 'Hot Coffee', image: '',
           modifierGroups: [{ groupId: 'mg_milk', name: 'Milk Options', options: [{ modId: 'mod_whole', name: 'Whole Milk', priceDelta: 0 }, { modId: 'mod_oat', name: 'Oat Milk (+৳0.50)', priceDelta: 0.50 }]}]
         },
-        { productId: 'prod_2', name: 'Americano', price: 3.00, category: 'Hot Coffee', image: '', modifierGroups: [] },
-        { productId: 'prod_3', name: 'Croissant', price: 3.75, category: 'Pastry', image: '', modifierGroups: [] }
+        { productId: 'prod_2', name: 'Americano', price: 3.00, cost: 0.50, category: 'Hot Coffee', image: '', modifierGroups: [] },
+        { productId: 'prod_3', name: 'Croissant', price: 3.75, cost: 1.00, category: 'Pastry', image: '', modifierGroups: [] }
       ]);
     }
     return db;

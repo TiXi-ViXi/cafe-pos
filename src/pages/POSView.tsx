@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { getDatabase } from '../database/db';
 
 interface Product {
-  productId: string; name: string; price: number; category: string; image?: string; modifierGroups: any[];
+  productId: string; name: string; price: number; cost?: number; category: string; image?: string; modifierGroups: any[];
 }
 interface CartItem {
   cartItemId: string; product: Product; modifiers: any[];
@@ -86,19 +86,37 @@ export default function POSView() {
     if (!isPaid && !selectedTable) {
       alert("⚠️ Select a table before holding an order!");
       setMainView('floorplan');
-      if(window.innerWidth < 1024) setMobileTab('main');
+      if (window.innerWidth < 1024) setMobileTab('main');
       return;
     }
+
     try {
       const db = await getDatabase();
+      const totalCost = cart.reduce((sum, item) => sum + (item.product.cost || 0), 0);
+      
       const formattedItems = cart.map(item => {
         const itemModTotal = item.modifiers.reduce((mSum, m) => mSum + m.priceDelta, 0);
-        return { productId: item.product.productId, name: item.product.name, modifiers: item.modifiers, lineTotal: item.product.price + itemModTotal };
+        return { 
+          productId: item.product.productId, 
+          name: item.product.name, 
+          modifiers: item.modifiers, 
+          lineTotal: item.product.price + itemModTotal,
+          cost: item.product.cost || 0
+        };
       });
+
       const payload = {
-        ticketId: activeTicketId || crypto.randomUUID(), status: isPaid ? 'PAID' : 'OPEN', createdAt: Date.now(),
-        customerName: customerName || 'Walk-in', orderType, tableNumber: selectedTable, items: formattedItems, grossTotal: parseFloat(totalWithTax)
+        ticketId: activeTicketId || crypto.randomUUID(),
+        status: isPaid ? 'PAID' : 'OPEN',
+        createdAt: Date.now(),
+        customerName: customerName || 'Walk-in Customer',
+        orderType,
+        tableNumber: selectedTable,
+        items: formattedItems,
+        grossTotal: parseFloat(totalWithTax),
+        totalCost: parseFloat(totalCost.toFixed(2))
       };
+
       if (activeTicketId) {
         const existing = await db.tickets.findOne(activeTicketId).exec();
         const { ticketId, ...updateData } = payload;
@@ -106,10 +124,11 @@ export default function POSView() {
       } else {
         await db.tickets.insert(payload);
       }
+
       if (isPaid) setReceiptData(payload);
       resetOrderSession();
       setMainView('floorplan');
-      if(window.innerWidth < 1024) setMobileTab('main');
+      if (window.innerWidth < 1024) setMobileTab('main');
     } catch (err: any) { alert(`Action Failed: ${err.message}`); }
   };
 
@@ -120,15 +139,21 @@ export default function POSView() {
         const menuProduct = menuItems.find(p => p.productId === tItem.productId);
         return {
           cartItemId: crypto.randomUUID(),
-          product: menuProduct || { productId: tItem.productId, name: tItem.name, price: tItem.lineTotal - tItem.modifiers.reduce((m:any, x:any) => m + x.priceDelta, 0), category: '', modifierGroups: [] },
+          product: menuProduct || { productId: tItem.productId, name: tItem.name, price: tItem.lineTotal - tItem.modifiers.reduce((m:any, x:any) => m + x.priceDelta, 0), cost: tItem.cost || 0, category: '', modifierGroups: [] },
           modifiers: tItem.modifiers
         };
       });
-      setCart(reconstructedCart); setCustomerName(activeTicket.customerName); setOrderType(activeTicket.orderType); setSelectedTable(activeTicket.tableNumber); setActiveTicketId(activeTicket.ticketId);
+      setCart(reconstructedCart);
+      setCustomerName(activeTicket.customerName);
+      setOrderType(activeTicket.orderType);
+      setSelectedTable(activeTicket.tableNumber);
+      setActiveTicketId(activeTicket.ticketId);
     } else {
-      resetOrderSession(); setSelectedTable(tableId); setMainView('menu');
+      resetOrderSession();
+      setSelectedTable(tableId);
+      setMainView('menu');
     }
-    if(window.innerWidth < 1024) setMobileTab('cart');
+    if (window.innerWidth < 1024) setMobileTab('cart');
   };
 
   const subtotal = cart.reduce((sum, item) => sum + item.product.price + item.modifiers.reduce((mSum, m) => mSum + m.priceDelta, 0), 0);

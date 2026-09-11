@@ -9,17 +9,16 @@ export default defineConfig({
     tailwindcss(), 
     VitePWA({ 
       registerType: 'autoUpdate',
-      // This manifest tells the browser it's a real app
       manifest: {
         name: 'Byron Bay Bliss POS',
         short_name: 'Cafe POS',
         description: 'Offline-first Point of Sale system',
         theme_color: '#1a1a1a',
         background_color: '#1a1a1a',
-        display: 'standalone', // Removes the browser URL bar
+        display: 'standalone', 
         icons: [
           {
-            src: 'https://cdn-icons-png.flaticon.com/512/751/751688.png', // Placeholder coffee cup icon
+            src: 'https://cdn-icons-png.flaticon.com/512/751/751688.png', 
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any maskable'
@@ -32,10 +31,11 @@ export default defineConfig({
         ]
       },
       workbox: {
-        // Caches all these file types so they load without internet
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}']
       }
     })
   ],
-  base: '/cafe-pos/', 
+  // CRITICAL CHANGE: This must be a relative dot-slash so Electron 
+  // can find the files on your computer's local hard drive
+  base: './', 
 })
