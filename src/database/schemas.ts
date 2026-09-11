@@ -7,6 +7,7 @@ export const menuSchema = {
     name: { type: 'string' },
     price: { type: 'number' },
     category: { type: 'string' },
+    image: { type: 'string' },
     modifierGroups: {
       type: 'array',
       items: {
@@ -38,13 +39,11 @@ export const ticketSchema = {
   type: 'object',
   properties: {
     ticketId: { type: 'string', maxLength: 100 },
-    status: { 
-      type: 'string', 
-      enum: ['OPEN', 'PAID', 'SYNCED', 'FAILED'] 
-    },
+    status: { type: 'string', enum: ['OPEN', 'PAID', 'SYNCED', 'FAILED'] },
     createdAt: { type: 'number' },
     customerName: { type: 'string' },
     orderType: { type: 'string' },
+    tableNumber: { type: 'string' }, // NEW: Table Tracking
     items: {
       type: 'array',
       items: {

@@ -1,11 +1,9 @@
-// src/database/db.ts
 import { createRxDatabase, addRxPlugin } from 'rxdb';
 import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
 import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
 import { menuSchema, ticketSchema } from './schemas';
 
-// Enable RxDB dev mode for helpful error messages during development
 if (import.meta.env.DEV) {
   addRxPlugin(RxDBDevModePlugin);
 }
@@ -17,11 +15,8 @@ export const getDatabase = async () => {
 
   const createDB = async () => {
     const db = await createRxDatabase({
-      name: 'cafepos_v2',
-      // Wrap the local storage engine with the strict schema validator
-      storage: wrappedValidateAjvStorage({
-        storage: getRxStorageDexie()
-      })
+      name: 'cafepos_v5', // Bumped to v5 for Floor Plan update
+      storage: wrappedValidateAjvStorage({ storage: getRxStorageDexie() })
     });
 
     await db.addCollections({
@@ -29,27 +24,17 @@ export const getDatabase = async () => {
       tickets: { schema: ticketSchema }
     });
 
-    // Seed the database with dummy menu items if it's empty
     const menuItems = await db.menu.find().exec();
     if (menuItems.length === 0) {
       await db.menu.bulkInsert([
         { 
-          productId: 'prod_1', name: 'Latte', price: 4.50, category: 'Hot Coffee',
-          modifierGroups: [
-            {
-              groupId: 'mg_milk', name: 'Milk Options',
-              options: [
-                { modId: 'mod_whole', name: 'Whole Milk', priceDelta: 0 },
-                { modId: 'mod_oat', name: 'Oat Milk (+৳0.50)', priceDelta: 0.50 }
-              ]
-            }
-          ]
+          productId: 'prod_1', name: 'Latte', price: 4.50, category: 'Hot Coffee', image: '',
+          modifierGroups: [{ groupId: 'mg_milk', name: 'Milk Options', options: [{ modId: 'mod_whole', name: 'Whole Milk', priceDelta: 0 }, { modId: 'mod_oat', name: 'Oat Milk (+৳0.50)', priceDelta: 0.50 }]}]
         },
-        { productId: 'prod_2', name: 'Americano', price: 3.00, category: 'Hot Coffee', modifierGroups: [] },
-        { productId: 'prod_3', name: 'Croissant', price: 3.75, category: 'Pastry', modifierGroups: [] }
+        { productId: 'prod_2', name: 'Americano', price: 3.00, category: 'Hot Coffee', image: '', modifierGroups: [] },
+        { productId: 'prod_3', name: 'Croissant', price: 3.75, category: 'Pastry', image: '', modifierGroups: [] }
       ]);
     }
-
     return db;
   };
 

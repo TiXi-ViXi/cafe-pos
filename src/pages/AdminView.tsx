@@ -1,29 +1,47 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getDatabase } from '../database/db';
 
 export default function AdminView() {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'settings'>('dashboard');
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [tickets, setTickets] = useState<any[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   
-  // Base Form State
+  const [settings, setSettings] = useState(() => {
+    const saved = localStorage.getItem('pos_settings');
+    return saved ? JSON.parse(saved) : {
+      storeName: 'BYRON BLISS', branchName: 'Khulna Branch', cashierName: 'Nirvik', currencySymbol: '৳', taxRate: 10, categories: 'Hot Coffee, Iced Coffee, Pastry, Beverage',
+      tables: [
+        { id: 't1', name: 'Table 1', shape: 'rect', x: 10, y: 10 }, { id: 't2', name: 'Table 2', shape: 'rect', x: 30, y: 10 },
+        { id: 'b1', name: 'B1', shape: 'circle', x: 10, y: 40 }, { id: 'b2', name: 'B2', shape: 'circle', x: 30, y: 40 }
+      ]
+    };
+  });
+  
+  const categoryList = settings.categories.split(',').map((c: string) => c.trim());
+
+  // Product Form State
+  const [editId, setEditId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newPrice, setNewPrice] = useState('');
-  const [newCategory, setNewCategory] = useState('Hot Coffee');
-
-  // Modifier Form State
+  const [newCategory, setNewCategory] = useState(categoryList[0] || '');
+  const [newImage, setNewImage] = useState('');
   const [tempMods, setTempMods] = useState<{name: string, priceDelta: number}[]>([]);
   const [modName, setModName] = useState('');
   const [modPrice, setModPrice] = useState('');
 
+  // Floor Plan Builder State
+  const [newTableName, setNewTableName] = useState('');
+  const [newTableShape, setNewTableShape] = useState<'rect'|'circle'>('rect');
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [dragState, setDragState] = useState<{id: string, offX: number, offY: number} | null>(null);
+
   useEffect(() => {
     const loadData = async () => {
       const db = await getDatabase();
-      
       const items = await db.menu.find().exec();
       setMenuItems(items.map((item: any) => item.toJSON()));
-
       const savedTickets = await db.tickets.find().exec();
       const parsedTickets = savedTickets.map((t: any) => t.toJSON());
       parsedTickets.sort((a: any, b: any) => b.createdAt - a.createdAt);
@@ -32,175 +50,165 @@ export default function AdminView() {
     loadData();
   }, []);
 
-  const handleDeleteProduct = async (productId: string) => {
-    if (!window.confirm('Are you sure you want to delete this item?')) return;
+  const handleSaveSettings = () => {
+    localStorage.setItem('pos_settings', JSON.stringify(settings));
+    alert('Store Configuration & Floor Plan Saved!');
+  };
+
+  // Drag and Drop Logic
+  const addTable = () => {
+    if(!newTableName) return;
+    setSettings({
+      ...settings, 
+      tables: [...(settings.tables || []), { id: crypto.randomUUID(), name: newTableName, shape: newTableShape, x: 40, y: 40 }]
+    });
+    setNewTableName('');
+  };
+
+  const removeTable = (id: string) => {
+    setSettings({ ...settings, tables: settings.tables.filter((t: any) => t.id !== id) });
+  };
+
+  const startDrag = (e: React.MouseEvent, id: string) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setDragState({ id, offX: e.clientX - rect.left, offY: e.clientY - rect.top });
+  };
+
+  const onDragMove = (e: React.MouseEvent) => {
+    if (!dragState || !canvasRef.current) return;
+    const parent = canvasRef.current.getBoundingClientRect();
+    let newX = ((e.clientX - parent.left - dragState.offX) / parent.width) * 100;
+    let newY = ((e.clientY - parent.top - dragState.offY) / parent.height) * 100;
     
-    try {
-      const db = await getDatabase();
-      const query = db.menu.find({ selector: { productId } });
-      await query.remove();
-      setMenuItems(prev => prev.filter(p => p.productId !== productId));
-    } catch (err) {
-      console.error('Failed to delete product:', err);
-    }
+    // Keep inside boundaries
+    newX = Math.max(0, Math.min(newX, 90));
+    newY = Math.max(0, Math.min(newY, 90));
+
+    setSettings({
+      ...settings,
+      tables: settings.tables.map((t: any) => t.id === dragState.id ? { ...t, x: newX, y: newY } : t)
+    });
   };
 
-  const handleAddTempMod = () => {
-    if (!modName) return;
-    setTempMods(prev => [...prev, { name: modName, priceDelta: parseFloat(modPrice) || 0 }]);
-    setModName('');
-    setModPrice('');
-  };
+  const endDrag = () => setDragState(null);
 
-  const handleRemoveTempMod = (index: number) => {
-    setTempMods(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const resetForm = () => {
-    setShowAddModal(false);
-    setNewName('');
-    setNewPrice('');
-    setTempMods([]);
-  };
-
-  const handleSaveProduct = async () => {
-    if (!newName || !newPrice) return;
-    const db = await getDatabase();
-    
-    const nextId = `prod_${Date.now()}`;
-
-    const modifierGroups = tempMods.length > 0 ? [{
-      groupId: crypto.randomUUID(),
-      name: "Custom Options",
-      options: tempMods.map(m => ({
-        modId: crypto.randomUUID(),
-        name: m.name,
-        priceDelta: m.priceDelta
-      }))
-    }] : [];
-
-    const newItem = {
-      productId: nextId,
-      name: newName,
-      price: parseFloat(newPrice),
-      category: newCategory,
-      modifierGroups
-    };
-
-    try {
-      await db.menu.insert(newItem);
-      setMenuItems(prev => [...prev, newItem]);
-      resetForm();
-    } catch (err) {
-      console.error('Failed to save product:', err);
-    }
-  };
-
+  // Sync Logic
   const handleSync = async () => {
     setIsSyncing(true);
     try {
       const db = await getDatabase();
       const pendingTickets = await db.tickets.find({ selector: { status: 'PAID' } }).exec();
-
-      if (pendingTickets.length === 0) {
-        alert('All tickets are already synced to the cloud!');
-        setIsSyncing(false);
-        return;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      for (const ticket of pendingTickets) {
-        await ticket.incrementalPatch({ status: 'SYNCED' });
-      }
-
+      if (pendingTickets.length === 0) { alert('All tickets synced!'); setIsSyncing(false); return; }
+      for (const ticket of pendingTickets) { await ticket.incrementalPatch({ status: 'SYNCED' }); }
       const updatedTickets = await db.tickets.find().exec();
       const parsedUpdated = updatedTickets.map((t: any) => t.toJSON());
       parsedUpdated.sort((a: any, b: any) => b.createdAt - a.createdAt);
       setTickets(parsedUpdated);
-      
       alert(`Successfully synced ${pendingTickets.length} tickets!`);
-    } catch (err) {
-      console.error('Sync failed:', err);
-      alert('Cloud sync failed. Please try again.');
-    }
+    } catch (err) { alert('Cloud sync failed.'); }
     setIsSyncing(false);
+  };
+
+  // Image Upload Logic
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 300; canvas.height = 300;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        const minDim = Math.min(img.width, img.height);
+        const sx = (img.width - minDim) / 2;
+        const sy = (img.height - minDim) / 2;
+        ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, 300, 300);
+        setNewImage(canvas.toDataURL('image/jpeg', 0.8));
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const openEditModal = (item: any) => {
+    setEditId(item.productId); setNewName(item.name); setNewPrice(item.price.toString());
+    setNewCategory(item.category); setNewImage(item.image || ''); setTempMods(item.modifierGroups?.[0]?.options || []);
+    setShowAddModal(true);
+  };
+
+  const resetForm = () => {
+    setShowAddModal(false); setEditId(null); setNewName(''); setNewPrice(''); setNewImage(''); setTempMods([]);
+  };
+
+  const handleSaveProduct = async () => {
+    if (!newName || !newPrice) return;
+    const db = await getDatabase();
+    const modifierGroups = tempMods.length > 0 ? [{ groupId: crypto.randomUUID(), name: "Custom Options", options: tempMods.map(m => ({ modId: (m as any).modId || crypto.randomUUID(), name: m.name, priceDelta: m.priceDelta })) }] : [];
+    try {
+      if (editId) {
+        const doc = await db.menu.findOne({ selector: { productId: editId } }).exec();
+        await doc.patch({ name: newName, price: parseFloat(newPrice), category: newCategory || categoryList[0], image: newImage, modifierGroups });
+        setMenuItems(prev => prev.map(p => p.productId === editId ? { ...p, name: newName, price: parseFloat(newPrice), category: newCategory, image: newImage, modifierGroups } : p));
+      } else {
+        const newItem = { productId: `prod_${Date.now()}`, name: newName, price: parseFloat(newPrice), category: newCategory || categoryList[0], image: newImage, modifierGroups };
+        await db.menu.insert(newItem); setMenuItems(prev => [...prev, newItem]);
+      }
+      resetForm();
+    } catch (err) { console.error(err); }
+  };
+
+  const handleDeleteProduct = async (productId: string) => {
+    if (!window.confirm('Delete item?')) return;
+    const db = await getDatabase();
+    const query = db.menu.find({ selector: { productId } });
+    await query.remove();
+    setMenuItems(prev => prev.filter(p => p.productId !== productId));
   };
 
   return (
     <div className="p-4 md:p-8 bg-[#f4f5f7] min-h-screen text-gray-800 font-sans flex flex-col gap-6 select-none">
-      
-      {/* ADD PRODUCT MODAL */}
+      {/* Product Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white p-6 rounded-2xl w-full max-w-lg shadow-2xl border border-gray-100 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-extrabold text-gray-900 mb-4">Add New Product</h2>
-            
-            <div className="flex flex-col gap-3 mb-6">
-              <input 
-                type="text" 
-                placeholder="Product Name" 
-                value={newName} 
-                onChange={e => setNewName(e.target.value)} 
-                className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" 
-              />
+          <div className="bg-white p-6 rounded-2xl w-full max-w-lg shadow-2xl border border-gray-100 max-h-[90vh] overflow-y-auto flex flex-col gap-5">
+            <h2 className="text-xl font-extrabold text-gray-900">{editId ? 'Edit Product' : 'Add New Product'}</h2>
+            <div className="flex gap-4 items-center bg-gray-50 p-4 rounded-xl border border-gray-200">
+              <div className="w-20 h-20 bg-gray-200 rounded-lg overflow-hidden flex items-center justify-center border border-gray-300 shrink-0">
+                {newImage ? <img src={newImage} alt="Preview" className="w-full h-full object-cover" /> : <span className="text-2xl">📷</span>}
+              </div>
+              <div className="flex-1">
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Product Image (Auto-Squares)</label>
+                <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100" />
+              </div>
+            </div>
+            <div className="flex flex-col gap-3">
+              <input type="text" placeholder="Product Name" value={newName} onChange={e => setNewName(e.target.value)} className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
               <div className="flex gap-3">
-                <input 
-                  type="number" 
-                  placeholder="Base Price (৳)" 
-                  value={newPrice} 
-                  onChange={e => setNewPrice(e.target.value)} 
-                  className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium flex-1" 
-                />
-                <select 
-                  value={newCategory} 
-                  onChange={e => setNewCategory(e.target.value)} 
-                  className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium text-gray-700 flex-1"
-                >
-                  <option value="Hot Coffee">Hot Coffee</option>
-                  <option value="Iced Coffee">Iced Coffee</option>
-                  <option value="Pastry">Pastry</option>
-                  <option value="Beverage">Beverage</option>
+                <input type="number" placeholder={`Base Price (${settings.currencySymbol})`} value={newPrice} onChange={e => setNewPrice(e.target.value)} className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium flex-1" />
+                <select value={newCategory} onChange={e => setNewCategory(e.target.value)} className="p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium text-gray-700 flex-1">
+                  {categoryList.map((cat: string) => <option key={cat} value={cat}>{cat}</option>)}
                 </select>
               </div>
             </div>
-
-            <div className="mb-6 border-t border-gray-100 pt-4">
-              <h3 className="font-bold mb-3 text-gray-400 uppercase text-xs tracking-wider">Add Modifiers (Optional)</h3>
+            <div className="border-t border-gray-100 pt-4">
+              <h3 className="font-bold mb-3 text-gray-400 uppercase text-xs tracking-wider">Modifiers</h3>
               <div className="flex gap-2 mb-3">
-                <input 
-                  type="text" 
-                  placeholder="Name (e.g. Soy Milk)" 
-                  value={modName} 
-                  onChange={e => setModName(e.target.value)} 
-                  className="p-2.5 bg-gray-50 border border-gray-200 rounded-xl flex-1 text-xs focus:outline-none focus:border-emerald-600" 
-                />
-                <input 
-                  type="number" 
-                  placeholder="+৳ 0.00" 
-                  value={modPrice} 
-                  onChange={e => setModPrice(e.target.value)} 
-                  className="p-2.5 bg-gray-50 border border-gray-200 rounded-xl w-24 text-xs focus:outline-none focus:border-emerald-600" 
-                />
-                <button 
-                  onClick={handleAddTempMod} 
-                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 rounded-xl font-bold transition text-xs"
-                >
-                  Add
-                </button>
+                <input type="text" placeholder="Name" value={modName} onChange={e => setModName(e.target.value)} className="p-2.5 bg-gray-50 border border-gray-200 rounded-xl flex-1 text-xs focus:outline-none focus:border-emerald-600" />
+                <input type="number" placeholder={`+${settings.currencySymbol} 0.00`} value={modPrice} onChange={e => setModPrice(e.target.value)} className="p-2.5 bg-gray-50 border border-gray-200 rounded-xl w-24 text-xs focus:outline-none focus:border-emerald-600" />
+                <button onClick={() => { if(modName) { setTempMods(prev => [...prev, { name: modName, priceDelta: parseFloat(modPrice) || 0 }]); setModName(''); setModPrice(''); } }} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 rounded-xl font-bold transition text-xs">Add</button>
               </div>
-              
               <div className="flex flex-col gap-2 max-h-32 overflow-y-auto">
                 {tempMods.map((mod, idx) => (
                   <div key={idx} className="flex justify-between items-center bg-gray-50 p-2.5 rounded-xl text-xs border border-gray-200 font-medium">
-                    <span>{mod.name} <span className="text-emerald-700 font-bold">+৳{mod.priceDelta.toFixed(2)}</span></span>
-                    <button onClick={() => handleRemoveTempMod(idx)} className="text-red-500 hover:text-red-700 font-bold px-2">✕</button>
+                    <span>{mod.name} <span className="text-emerald-700 font-bold">+{settings.currencySymbol}{mod.priceDelta.toFixed(2)}</span></span>
+                    <button onClick={() => setTempMods(prev => prev.filter((_, i) => i !== idx))} className="text-red-500 hover:text-red-700 font-bold px-2">✕</button>
                   </div>
                 ))}
               </div>
             </div>
-
-            <div className="flex gap-3 pt-4 border-t border-gray-100">
+            <div className="flex gap-3 pt-2">
               <button onClick={resetForm} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition text-sm">Cancel</button>
               <button onClick={handleSaveProduct} className="flex-1 py-3 bg-emerald-800 hover:bg-emerald-900 text-white rounded-xl font-bold transition text-sm shadow-md">Save Product</button>
             </div>
@@ -208,94 +216,159 @@ export default function AdminView() {
         </div>
       )}
 
-      {/* HEADER */}
-      <header className="bg-white px-6 py-4 rounded-2xl flex justify-between items-center border border-gray-200 shadow-sm">
-        <h1 className="text-lg md:text-xl font-black text-gray-900">Admin Dashboard</h1>
-        <a href="#/" className="bg-emerald-800 hover:bg-emerald-900 px-4 py-2 rounded-xl font-bold transition text-white text-xs md:text-sm no-underline shadow-sm">
-          ← Back to POS
-        </a>
+      {/* Admin Header */}
+      <header className="bg-white px-6 py-4 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center border border-gray-200 shadow-sm gap-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
+          <h1 className="text-lg md:text-xl font-black text-gray-900">Admin Dashboard</h1>
+          <div className="flex gap-2 bg-gray-100 p-1 rounded-lg">
+            <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === 'dashboard' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Database</button>
+            <button onClick={() => setActiveTab('settings')} className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === 'settings' ? 'bg-white text-emerald-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Store & Floor Plan</button>
+          </div>
+        </div>
+        <a href="#/" className="bg-emerald-800 hover:bg-emerald-900 px-4 py-2 rounded-xl font-bold transition text-white text-xs md:text-sm no-underline shadow-sm">← Back to POS</a>
       </header>
       
-      {/* DASHBOARD GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        
-        {/* TICKET HISTORY SECTION */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-          <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-3">
-            <h2 className="text-base md:text-lg font-extrabold text-gray-900">Offline Ticket History</h2>
-            <button 
-              onClick={handleSync} 
-              disabled={isSyncing} 
-              className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded-xl font-bold transition text-xs flex items-center gap-1.5 shadow-sm"
-            >
-              {isSyncing ? 'Syncing...' : '🔄 Sync Now'}
-            </button>
-          </div>
-
-          <div className="flex flex-col gap-3 max-h-[450px] overflow-y-auto pr-1">
-            {tickets.length === 0 ? <p className="text-gray-400 italic text-sm">No tickets saved yet.</p> : (
-              tickets.map(ticket => (
-                <div key={ticket.ticketId} className="bg-gray-50 p-4 rounded-xl border border-gray-200/60 flex justify-between items-center">
-                  <div className="flex flex-col">
-                    <span className="font-extrabold text-emerald-800 text-base">৳{ticket.grossTotal.toFixed(2)}</span>
-                    <span className="text-gray-400 text-xs mt-0.5">{new Date(ticket.createdAt).toLocaleString()}</span>
-                    {ticket.customerName && <span className="text-xs text-gray-600 font-medium mt-1">👤 {ticket.customerName} ({ticket.orderType})</span>}
+      {activeTab === 'dashboard' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+            <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-3">
+              <h2 className="text-base md:text-lg font-extrabold text-gray-900">Offline Ticket History</h2>
+              <button onClick={handleSync} disabled={isSyncing} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-3 py-1.5 rounded-xl font-bold transition text-xs flex items-center gap-1.5 shadow-sm">
+                {isSyncing ? 'Syncing...' : '🔄 Sync Now'}
+              </button>
+            </div>
+            <div className="flex flex-col gap-3 max-h-[450px] overflow-y-auto pr-1">
+              {tickets.length === 0 ? <p className="text-gray-400 italic text-sm">No tickets saved yet.</p> : (
+                tickets.map(ticket => (
+                  <div key={ticket.ticketId} className="bg-gray-50 p-4 rounded-xl border border-gray-200/60 flex justify-between items-center">
+                    <div className="flex flex-col">
+                      <span className="font-extrabold text-emerald-800 text-base">{settings.currencySymbol}{ticket.grossTotal.toFixed(2)}</span>
+                      <span className="text-gray-400 text-xs mt-0.5">{new Date(ticket.createdAt).toLocaleString()}</span>
+                      {ticket.customerName && <span className="text-xs text-gray-600 font-medium mt-1">👤 {ticket.customerName} ({ticket.orderType}) {ticket.tableNumber && `- Table: ${ticket.tableNumber}`}</span>}
+                    </div>
+                    <div className={`text-xs px-3 py-1 rounded-full font-bold tracking-wide ${ticket.status === 'SYNCED' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {ticket.status}
+                    </div>
                   </div>
-                  <div className={`text-xs px-3 py-1 rounded-full font-bold tracking-wide ${
-                    ticket.status === 'SYNCED' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
-                  }`}>
-                    {ticket.status}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* PRODUCT DATABASE SECTION */}
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-          <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-3">
-            <h2 className="text-base md:text-lg font-extrabold text-gray-900">Product Database</h2>
-            <button 
-              onClick={() => setShowAddModal(true)} 
-              className="bg-emerald-800 hover:bg-emerald-900 text-white px-3.5 py-1.5 rounded-xl font-bold transition text-xs shadow-sm"
-            >
-              + Add Product
-            </button>
+                ))
+              )}
+            </div>
           </div>
 
-          <div className="overflow-x-auto max-h-[450px] overflow-y-auto pr-1">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-gray-200 text-gray-400 text-xs uppercase tracking-wider">
-                  <th className="py-3 px-2">Name</th>
-                  <th className="py-3 px-2">Category</th>
-                  <th className="py-3 px-2">Price</th>
-                  <th className="py-3 px-2 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {menuItems.map((item) => (
-                  <tr key={item.productId} className="border-b border-gray-100 hover:bg-gray-50 transition">
-                    <td className="py-3.5 px-2 font-bold text-sm text-gray-900">
-                      {item.name}
-                      {item.modifierGroups?.length > 0 && <span className="block text-[11px] text-emerald-600 font-medium mt-0.5">{item.modifierGroups[0].options.length} Modifiers</span>}
-                    </td>
-                    <td className="py-3.5 px-2 text-gray-500 text-xs">{item.category}</td>
-                    <td className="py-3.5 px-2 text-emerald-700 font-extrabold text-sm">৳{item.price.toFixed(2)}</td>
-                    <td className="py-3.5 px-2 text-right">
-                      <button onClick={() => handleDeleteProduct(item.productId)} className="text-red-500 hover:text-red-700 hover:bg-red-50 px-2.5 py-1.5 rounded-lg text-xs font-bold transition">
-                        Delete
-                      </button>
-                    </td>
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+            <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-3">
+              <h2 className="text-base md:text-lg font-extrabold text-gray-900">Product Database</h2>
+              <button onClick={() => { resetForm(); setShowAddModal(true); }} className="bg-emerald-800 hover:bg-emerald-900 text-white px-3.5 py-1.5 rounded-xl font-bold transition text-xs shadow-sm">+ Add Product</button>
+            </div>
+            <div className="overflow-x-auto max-h-[450px] overflow-y-auto pr-1">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-200 text-gray-400 text-xs uppercase tracking-wider">
+                    <th className="py-3 px-2">Item</th><th className="py-3 px-2">Price</th><th className="py-3 px-2 text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {menuItems.map((item) => (
+                    <tr key={item.productId} className="border-b border-gray-100 hover:bg-gray-50 transition">
+                      <td className="py-3 px-2 flex items-center gap-3">
+                        <div className="w-10 h-10 rounded bg-gray-100 overflow-hidden shrink-0 flex items-center justify-center">
+                          {item.image ? <img src={item.image} className="w-full h-full object-cover"/> : "☕"}
+                        </div>
+                        <div>
+                          <p className="font-bold text-sm text-gray-900">{item.name}</p>
+                          <p className="text-xs text-gray-500">{item.category}</p>
+                        </div>
+                      </td>
+                      <td className="py-3 px-2 text-emerald-700 font-extrabold text-sm">{settings.currencySymbol}{item.price.toFixed(2)}</td>
+                      <td className="py-3 px-2 text-right space-x-2">
+                        <button onClick={() => openEditModal(item)} className="text-blue-600 hover:text-blue-800 hover:bg-blue-50 px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Edit</button>
+                        <button onClick={() => handleDeleteProduct(item.productId)} className="text-red-500 hover:text-red-700 hover:bg-red-50 px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
-
-      </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-200 w-full">
+            <h2 className="text-xl font-extrabold text-gray-900 mb-6">Store Configuration</h2>
+            <div className="flex flex-col gap-5">
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Store Name</label>
+                  <input type="text" value={settings.storeName} onChange={e => setSettings({...settings, storeName: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Branch</label>
+                  <input type="text" value={settings.branchName} onChange={e => setSettings({...settings, branchName: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
+                </div>
+              </div>
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Cashier</label>
+                  <input type="text" value={settings.cashierName} onChange={e => setSettings({...settings, cashierName: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
+                </div>
+                <div className="w-24">
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Currency</label>
+                  <input type="text" value={settings.currencySymbol} onChange={e => setSettings({...settings, currencySymbol: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium text-center" />
+                </div>
+                <div className="w-24">
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Tax (%)</label>
+                  <input type="number" value={settings.taxRate} onChange={e => setSettings({...settings, taxRate: parseFloat(e.target.value) || 0})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium text-center" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Menu Categories</label>
+                <input type="text" value={settings.categories} onChange={e => setSettings({...settings, categories: e.target.value})} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
+              </div>
+              <button onClick={handleSaveSettings} className="mt-4 w-full bg-emerald-800 hover:bg-emerald-900 text-white py-4 rounded-xl text-sm font-extrabold shadow-lg shadow-emerald-800/20 transition duration-200">
+                Save All Changes
+              </button>
+            </div>
+          </div>
+          
+          <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-200 w-full flex flex-col h-full">
+            <h2 className="text-xl font-extrabold text-gray-900 mb-6">Drag & Drop Floor Plan</h2>
+            <div className="flex gap-3 mb-4 shrink-0">
+              <input type="text" placeholder="Table Name (e.g. T1)" value={newTableName} onChange={e => setNewTableName(e.target.value)} className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium" />
+              <select value={newTableShape} onChange={e => setNewTableShape(e.target.value as any)} className="w-28 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 font-medium">
+                <option value="rect">Square</option>
+                <option value="circle">Circle</option>
+              </select>
+              <button onClick={addTable} className="bg-emerald-800 text-white px-5 rounded-xl font-bold shadow-sm hover:bg-emerald-900 transition">Add</button>
+            </div>
+            
+            {/* Interactive Builder Canvas */}
+            <div 
+              ref={canvasRef}
+              onMouseMove={onDragMove}
+              onMouseUp={endDrag}
+              onMouseLeave={endDrag}
+              className="flex-1 min-h-[400px] bg-gray-100 rounded-xl border-4 border-dashed border-gray-300 relative overflow-hidden mt-2"
+            >
+              <span className="absolute top-3 left-4 text-xs font-bold text-gray-400 uppercase tracking-widest pointer-events-none">Click & drag tables to position</span>
+              {(settings.tables || []).map((t: any) => (
+                <div 
+                  key={t.id}
+                  onMouseDown={(e) => startDrag(e, t.id)}
+                  style={{ left: `${t.x}%`, top: `${t.y}%` }}
+                  className={`
+                    absolute cursor-move shadow-md flex flex-col items-center justify-center bg-gray-800 text-white border-2 border-gray-600
+                    ${t.shape === 'circle' ? 'rounded-full w-16 h-16' : 'rounded-lg w-20 h-14'}
+                    ${dragState?.id === t.id ? 'opacity-70 scale-105 z-10' : 'hover:scale-105'}
+                  `}
+                >
+                  <span className="text-xs font-bold pointer-events-none">{t.name}</span>
+                  <button onClick={(e) => { e.stopPropagation(); removeTable(t.id); }} className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-5 h-5 text-[10px] flex items-center justify-center shadow">✕</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
