@@ -357,8 +357,17 @@ export default function POSView() {
                   <option value="Delivery">Delivery</option>
                 </select>
                 {orderType === 'Dine In' && (
-                  <input type="text" placeholder="Table No." value={selectedTable} onChange={e => setSelectedTable(e.target.value)} className="bg-[#f8f9fa] border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-bold text-gray-700 placeholder-gray-400 focus:outline-none focus:border-[#ff9f43] transition" />
-                )}
+  <select 
+    value={selectedTable} 
+    onChange={e => setSelectedTable(e.target.value)} 
+    className="bg-[#f8f9fa] border border-gray-200 rounded-lg px-3 py-2.5 text-[12px] font-bold text-gray-700 focus:outline-none focus:border-[#ff9f43] transition cursor-pointer"
+  >
+    <option value="" disabled>Select Table</option>
+    {(settings.tables || []).map((t: any) => (
+      <option key={t.id} value={t.name}>{t.name}</option>
+    ))}
+  </select>
+)}
               </div>
 
               {/* PAYMENT METHOD DROPDOWN */}
