@@ -15,7 +15,7 @@ export const getDatabase = async () => {
 
   const createDB = async () => {
     const db = await createRxDatabase({
-      name: 'cafepos_v8',
+      name: 'cafepos_v11', // Bumped version
       storage: wrappedValidateAjvStorage({ storage: getRxStorageDexie() })
     });
 

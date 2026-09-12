@@ -4,6 +4,9 @@ import POSView from './pages/POSView';
 import AdminView from './pages/AdminView';
 import { getDatabase } from './database/db';
 
+// 1. IMPORT ONLY THE NEW CONTINUOUS SYNC LOOP
+import { startContinuousSync } from './services/syncService';
+
 export default function App() {
   const [user, setUser] = useState<any>(() => {
     const saved = localStorage.getItem('pos_user');
@@ -12,6 +15,13 @@ export default function App() {
   
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
+
+  // 2. BULLETPROOF BACKGROUND SYNC
+  useEffect(() => {
+    // This triggers the robust 10-second loop from your syncService
+    // It will automatically run forever in the background while the app is open.
+    startContinuousSync();
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -25,8 +25,10 @@ export const ticketSchema = {
     customerName: { type: 'string' },
     cashierId: { type: 'string' },
     cashierName: { type: 'string' },
+    waiterName: { type: 'string' },
     orderType: { type: 'string' },
     tableNumber: { type: 'string' },
+    paymentMethod: { type: ['string', 'null'] }, // NEW: Added paymentMethod to schema
     items: { type: 'array', items: { type: 'object', properties: { productId: { type: 'string' }, name: { type: 'string' }, modifiers: { type: 'array' }, lineTotal: { type: 'number' }, cost: { type: 'number' } } } },
     grossTotal: { type: 'number' },
     totalCost: { type: 'number' }
