@@ -1,7 +1,22 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { getDatabase } from '../database/db';
-import { collection, getDocs, doc, updateDoc, query, orderBy } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, setDoc, query, orderBy } from 'firebase/firestore';
 import { db as firebaseDB } from '../database/firebase';
+
+const getLocalYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const getTicketDateKey = (timestamp: any) => {
+  if (!timestamp) return '';
+  let ms = timestamp;
+  if (typeof timestamp === 'object' && timestamp.seconds) {
+    ms = timestamp.seconds * 1000;
+  } else if (typeof timestamp === 'string') {
+    ms = Number(timestamp) || new Date(timestamp).getTime();
+  }
+  const d = new Date(ms);
+  if (isNaN(d.getTime())) return '';
+  return getLocalYMD(d);
+};
 
 export default function AdminView() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'products' | 'reports' | 'staff' | 'settings'>('dashboard');
@@ -11,8 +26,23 @@ export default function AdminView() {
   
   const [showAddModal, setShowAddModal] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // NEW: Mobile Sidebar State
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
+  // UI Logic States
+  const [timeFilter, setTimeFilter] = useState<'1D'|'1W'|'1M'|'6M'|'1Y'|'ALL'|'CUSTOM'>('ALL');
+  const [transactionTab, setTransactionTab] = useState<'Sale'|'Purchase'|'Quotation'>('Sale');
+  const [globalSearch, setGlobalSearch] = useState('');
+  
+  // Custom Date Range States
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date(); d.setMonth(0, 1);
+    return getLocalYMD(d);
+  });
+  const [endDate, setEndDate] = useState(() => {
+    const d = new Date(); d.setMonth(11, 31);
+    return getLocalYMD(d);
+  });
+
   const [settings, setSettings] = useState(() => {
     const saved = localStorage.getItem('pos_settings');
     return saved ? JSON.parse(saved) : { storeName: 'BYRON BLISS', branchName: 'Khulna Branch', currencySymbol: '৳', taxRate: 10, categories: 'Hot Coffee, Iced Coffee, Pastry, Beverage', tables: [{ id: 't1', name: 'Table 1', shape: 'rect', x: 10, y: 10 }] };
@@ -75,7 +105,6 @@ export default function AdminView() {
     }
   }
 
-  // VOID / CANCEL TRANSACTION
   const handleVoidCloudTicket = async (docId: string, ticketId: string) => {
     if (!window.confirm(`Are you sure you want to VOID ticket ${ticketId || docId}?`)) return;
     try {
@@ -101,43 +130,52 @@ export default function AdminView() {
       if (!waiterPerf[wName]) waiterPerf[wName] = { orders: 0, sales: 0 };
       waiterPerf[wName].orders++; waiterPerf[wName].sales += t.grossTotal;
 
-      t.items.forEach((i: any) => {
+      t.items?.forEach((i: any) => {
         itemsSold++;
         if (!itemPerf[i.name]) itemPerf[i.name] = { qty: 0, rev: 0 };
         itemPerf[i.name].qty++; itemPerf[i.name].rev += i.lineTotal;
       });
     });
 
-    const netSales = gross / (1 + (settings.taxRate / 100)); 
-    const tax = gross - netSales; 
-    const sortedWaiters = Object.entries(waiterPerf).sort((a: any, b: any) => b[1].sales - a[1].sales);
-
     return { 
-      gross, netSales, tax, totalCost, profit: gross - totalCost, orders, itemsSold, 
+      gross, tax: gross - (gross / (1 + (settings.taxRate / 100))), totalCost, profit: gross - totalCost, orders, itemsSold, 
       daily: Object.entries(daily).sort((a,b) => new Date(a[0]).getTime() - new Date(b[0]).getTime()).slice(-10), 
       topItems: Object.entries(itemPerf).sort((a: any, b: any) => b[1].qty - a[1].qty).slice(0, 5),
-      waiters: sortedWaiters
     };
   }, [paidTickets, settings.taxRate]);
 
-  // Comprehensive Cloud Stats (Excludes Voided)
-  const cloudStats = useMemo(() => {
-    const valid = cloudTickets.filter(t => t.status !== 'VOIDED');
-    let gross = 0; let totalCost = 0; let orders = valid.length; let itemsSold = 0;
-    const itemPerf: any = {}; const daily: any = {}; const catPerf: any = {};
+  // Filter Cloud Tickets based on Selected Timeframe OR Custom Dates
+  const filteredCloudTickets = useMemo(() => {
+    const now = Date.now();
+    const dayMs = 86400000;
+    let cutoff = 0;
+    let endMs = now;
     
-    // Initialize last 7 days for charts to look full
-    for(let i=6; i>=0; i--) {
-      const d = new Date(); d.setDate(d.getDate() - i);
-      daily[d.toLocaleDateString()] = { orders: 0, gross: 0, cost: 0 };
+    if (timeFilter === '1D') cutoff = now - dayMs;
+    else if (timeFilter === '1W') cutoff = now - (dayMs * 7);
+    else if (timeFilter === '1M') cutoff = now - (dayMs * 30);
+    else if (timeFilter === '6M') cutoff = now - (dayMs * 180);
+    else if (timeFilter === '1Y') cutoff = now - (dayMs * 365);
+    else if (timeFilter === 'CUSTOM') {
+      cutoff = new Date(`${startDate}T00:00:00`).getTime();
+      endMs = new Date(`${endDate}T23:59:59`).getTime();
     }
+
+    return cloudTickets.filter(t => {
+      if (timeFilter === 'ALL') return true;
+      const ms = t.createdAt ? (t.createdAt.seconds ? t.createdAt.seconds * 1000 : Number(t.createdAt)) : 0;
+      return ms >= cutoff && ms <= endMs;
+    });
+  }, [cloudTickets, timeFilter, startDate, endDate]);
+
+  // Comprehensive Cloud Stats
+  const cloudStats = useMemo(() => {
+    const valid = filteredCloudTickets.filter(t => t.status !== 'VOIDED');
+    let gross = 0; let totalCost = 0; let orders = valid.length; let itemsSold = 0;
+    const itemPerf: any = {}; const catPerf: any = {};
 
     valid.forEach(t => {
       gross += t.grossTotal || 0; totalCost += (t.totalCost || 0);
-      const dateStr = t.createdAt ? new Date(t.createdAt).toLocaleDateString() : new Date().toLocaleDateString();
-      if (!daily[dateStr]) daily[dateStr] = { orders: 0, gross: 0, cost: 0 };
-      daily[dateStr].orders++; daily[dateStr].gross += (t.grossTotal || 0); daily[dateStr].cost += (t.totalCost || 0);
-      
       t.items?.forEach((i: any) => {
         itemsSold++;
         if (!itemPerf[i.name]) itemPerf[i.name] = { qty: 0, rev: 0 };
@@ -153,10 +191,66 @@ export default function AdminView() {
 
     return { 
       gross, totalCost, profit: gross - totalCost, orders, itemsSold, aov: orders > 0 ? gross/orders : 0,
-      daily: Object.entries(daily).sort((a,b) => new Date(a[0]).getTime() - new Date(b[0]).getTime()).slice(-12), 
       topItems, categories: catArray
     };
-  }, [cloudTickets]);
+  }, [filteredCloudTickets]);
+
+  // UNIFIED CHART DATA: Computes side-by-side daily Local and Cloud volumes
+  const chartList = useMemo(() => {
+    let days = 7;
+    if (timeFilter === '1M') days = 30;
+    else if (timeFilter === '6M') days = 180;
+    else if (timeFilter === '1Y') days = 365;
+    else if (timeFilter === 'CUSTOM') {
+      const s = new Date(startDate);
+      const e = new Date(endDate);
+      days = Math.max(1, Math.min(365, Math.floor((e.getTime() - s.getTime()) / 86400000) + 1));
+    }
+
+    const endRef = timeFilter === 'CUSTOM' ? new Date(`${endDate}T23:59:59`) : new Date();
+    const map: Record<string, { date: string; label: string; localOrders: number; localGross: number; cloudOrders: number; cloudGross: number }> = {};
+
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(endRef);
+      d.setDate(d.getDate() - i);
+      const key = getLocalYMD(d);
+      const label = `${d.getDate()}/${d.getMonth() + 1}`;
+      map[key] = { date: key, label, localOrders: 0, localGross: 0, cloudOrders: 0, cloudGross: 0 };
+    }
+
+    // Populate local tickets
+    paidTickets.forEach(t => {
+      const k = getTicketDateKey(t.createdAt);
+      if (map[k]) {
+        map[k].localOrders++;
+        map[k].localGross += (t.grossTotal || 0);
+      }
+    });
+
+    // Populate cloud tickets
+    cloudTickets.filter(t => t.status !== 'VOIDED').forEach(t => {
+      const k = getTicketDateKey(t.createdAt);
+      if (map[k]) {
+        map[k].cloudOrders++;
+        map[k].cloudGross += (t.grossTotal || 0);
+      }
+    });
+
+    return Object.values(map).slice(-12);
+  }, [timeFilter, startDate, endDate, paidTickets, cloudTickets]);
+
+  const maxChartOrders = useMemo(() => {
+    return Math.max(
+      ...chartList.map(d => Math.max(d.localOrders, d.cloudOrders)),
+      5
+    );
+  }, [chartList]);
+
+  // Global Search Filtering Arrays
+  const searchLower = globalSearch.toLowerCase();
+  const searchedProducts = menuItems.filter(i => i.name.toLowerCase().includes(searchLower) || i.category.toLowerCase().includes(searchLower));
+  const searchedTickets = tickets.filter(t => t.ticketId.includes(searchLower) || t.customerName?.toLowerCase().includes(searchLower));
+  const searchedUsers = users.filter(u => u.username.toLowerCase().includes(searchLower) || u.role.toLowerCase().includes(searchLower));
 
   const handleSaveSettings = () => { localStorage.setItem('pos_settings', JSON.stringify(settings)); alert('Settings Saved!'); };
 
@@ -179,16 +273,16 @@ export default function AdminView() {
   const removeTable = (id: string) => setSettings({ ...settings, tables: settings.tables.filter((t: any) => t.id !== id) });
   
   const startDrag = (e: React.MouseEvent | React.TouchEvent, id: string) => { 
-    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX; 
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY; 
+    const clientX = 'touches' in e ? (e as React.TouchEvent).touches[0].clientX : (e as React.MouseEvent).clientX; 
+    const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY; 
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); 
     setDragState({ id, offX: clientX - rect.left, offY: clientY - rect.top }); 
   };
   
   const onDragMove = (e: React.MouseEvent | React.TouchEvent) => { 
     if (!dragState || !canvasRef.current) return; 
-    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX; 
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY; 
+    const clientX = 'touches' in e ? (e as React.TouchEvent).touches[0].clientX : (e as React.MouseEvent).clientX; 
+    const clientY = 'touches' in e ? (e as React.TouchEvent).touches[0].clientY : (e as React.MouseEvent).clientY; 
     const parent = canvasRef.current.getBoundingClientRect(); 
     let newX = ((clientX - parent.left - dragState.offX) / parent.width) * 100; 
     let newY = ((clientY - parent.top - dragState.offY) / parent.height) * 100; 
@@ -201,12 +295,22 @@ export default function AdminView() {
   const handleSync = async () => {
     setIsSyncing(true);
     try { 
-      const db = await getDatabase(); const pendingTickets = await db.tickets.find({ selector: { status: 'PAID' } }).exec(); 
+      const db = await getDatabase(); 
+      const pendingTickets = await db.tickets.find({ selector: { status: 'PAID' } }).exec(); 
       if (pendingTickets.length === 0) { alert('All synced!'); setIsSyncing(false); return; } 
-      for (const ticket of pendingTickets) { await ticket.incrementalPatch({ status: 'SYNCED' }); } 
-      const updatedTickets = await db.tickets.find().exec(); const parsedUpdated = updatedTickets.map((t: any) => t.toJSON()); parsedUpdated.sort((a: any, b: any) => b.createdAt - a.createdAt); setTickets(parsedUpdated); 
-      alert(`Synced ${pendingTickets.length} tickets!`); 
-    } catch (err) { alert('Sync failed.'); } setIsSyncing(false);
+      for (const ticket of pendingTickets) { 
+        const tData = ticket.toJSON();
+        await setDoc(doc(firebaseDB, 'tickets', tData.ticketId), tData); 
+        await ticket.incrementalPatch({ status: 'SYNCED' }); 
+      } 
+      const updatedTickets = await db.tickets.find().exec(); 
+      const parsedUpdated = updatedTickets.map((t: any) => t.toJSON()); 
+      parsedUpdated.sort((a: any, b: any) => b.createdAt - a.createdAt); 
+      setTickets(parsedUpdated); 
+      fetchCloudData(); 
+      alert(`Synced ${pendingTickets.length} tickets to Firebase!`); 
+    } catch (err: any) { alert(`Sync failed: ${err.message}`); } 
+    setIsSyncing(false);
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = (event) => { const img = new Image(); img.onload = () => { const canvas = document.createElement('canvas'); canvas.width = 300; canvas.height = 300; const ctx = canvas.getContext('2d'); if (!ctx) return; const minDim = Math.min(img.width, img.height); ctx.drawImage(img, (img.width - minDim) / 2, (img.height - minDim) / 2, minDim, minDim, 0, 0, 300, 300); setNewImage(canvas.toDataURL('image/jpeg', 0.8)); }; img.src = event.target?.result as string; }; reader.readAsDataURL(file); };
@@ -221,12 +325,13 @@ export default function AdminView() {
 
   const handleTabChange = (tab: any) => {
     setActiveTab(tab);
-    setIsSidebarOpen(false); // Close sidebar on mobile when tab changes
+    setGlobalSearch(''); 
+    setIsSidebarOpen(false); 
   };
 
   return (
     <div className="h-screen w-full bg-[#f4f7f6] text-gray-800 font-sans flex overflow-hidden select-none">
-      
+
       {/* Mobile Sidebar Overlay */}
       {isSidebarOpen && (
         <div 
@@ -235,27 +340,24 @@ export default function AdminView() {
         />
       )}
 
-      {/* ================= LEFT SIDEBAR (DREAMS POS STYLE) ================= */}
+      {/* ================= LEFT SIDEBAR ================= */}
       <aside className={`fixed lg:relative z-40 h-full w-[260px] bg-white border-r border-gray-200 flex flex-col shrink-0 shadow-[2px_0_10px_rgba(0,0,0,0.02)] transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        {/* Logo Header */}
         <div className="h-[70px] flex items-center px-6 border-b border-gray-100 gap-2 shrink-0 justify-between">
           <div className="flex items-center gap-2">
             <svg className="w-8 h-8 text-[#ff9f43]" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm2 4h12v10H6zm3 2v6h2v-6zm4 0v6h2v-6z"/></svg>
             <span className="font-black text-2xl tracking-tight text-[#0f172a] truncate w-24">{settings.storeName.split(' ')[0]}</span>
             <span className="text-[10px] font-bold text-[#ff9f43] mt-2">POS</span>
           </div>
-          {/* Close button for mobile */}
           <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden text-gray-400 hover:text-red-500">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
           </button>
         </div>
 
-        {/* Sidebar Nav */}
         <div className="flex-1 overflow-y-auto py-4 custom-scrollbar">
           <div className="px-4 mb-2">
             <span className="text-[11px] font-bold uppercase text-gray-400 tracking-wider">Main</span>
           </div>
-          
+
           <ul className="flex flex-col gap-1 px-3">
             <li>
               <button onClick={() => handleTabChange('dashboard')} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-bold transition-colors ${activeTab === 'dashboard' ? 'bg-[#fff5ec] text-[#ff9f43]' : 'text-gray-600 hover:bg-gray-50'}`}>
@@ -264,7 +366,7 @@ export default function AdminView() {
               </button>
             </li>
             <li onClick={() => handleTabChange('reports')} className={`pl-9 pr-3 py-2 text-[12px] font-medium cursor-pointer transition ${activeTab === 'reports' ? 'text-[#ff9f43]' : 'text-gray-500 hover:text-[#ff9f43]'}`}>• Local Terminal Reports</li>
-            
+
             <li className="mt-4 px-1">
               <span className="text-[11px] font-bold uppercase text-gray-400 tracking-wider">Inventory</span>
             </li>
@@ -293,20 +395,23 @@ export default function AdminView() {
 
       {/* ================= MAIN WRAPPER ================= */}
       <div className="flex-1 flex flex-col min-w-0 h-full relative overflow-x-hidden overflow-y-auto lg:overflow-hidden">
-        
+
         {/* ================= TOP NAVBAR ================= */}
         <header className="h-[70px] bg-white border-b border-gray-200 px-4 md:px-6 flex items-center justify-between shrink-0 z-10 shadow-sm">
           <div className="flex items-center gap-3 md:gap-4 flex-1">
-            {/* Mobile Hamburger Menu */}
             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 -ml-2 text-gray-600 hover:text-[#ff9f43] transition">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
             </button>
-            
-            <button className="hidden md:block text-gray-400 hover:text-[#ff9f43] transition bg-gray-50 p-2 rounded-full"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h7"></path></svg></button>
-            
+
             <div className="relative hidden md:block w-72">
               <svg className="w-4 h-4 absolute left-3 top-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-              <input type="text" placeholder="Search" className="w-full bg-[#f8f9fa] border border-gray-200 rounded-lg pl-9 pr-12 py-2.5 text-sm focus:outline-none focus:border-[#ff9f43] transition" />
+              <input 
+                type="text" 
+                placeholder={`Search ${activeTab}...`} 
+                value={globalSearch} 
+                onChange={(e) => setGlobalSearch(e.target.value)}
+                className="w-full bg-[#f8f9fa] border border-gray-200 rounded-lg pl-9 pr-12 py-2.5 text-sm focus:outline-none focus:border-[#ff9f43] transition" 
+              />
               <span className="absolute right-2 top-2 bg-white text-gray-400 text-[10px] font-bold px-1.5 py-1 rounded border border-gray-200 shadow-sm">⌘K</span>
             </div>
           </div>
@@ -315,17 +420,19 @@ export default function AdminView() {
             <div className="hidden md:flex items-center gap-2 border border-gray-200 px-3 py-1.5 rounded-lg bg-gray-50 cursor-pointer hover:border-gray-300 transition">
               <span className="text-sm">🏬</span> <span className="text-xs font-bold text-gray-700">{settings.branchName}</span>
             </div>
-            
-            <button onClick={() => { resetForm(); setShowAddModal(true); }} className="bg-[#ff9f43] hover:bg-orange-500 text-white px-3 md:px-4 py-2 md:py-2.5 rounded-lg text-xs font-bold flex items-center gap-1.5 md:gap-2 transition shadow-sm">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg> <span className="hidden sm:inline">Add New</span>
-            </button>
-            
+
+            {activeTab === 'products' && (
+              <button onClick={() => { resetForm(); setShowAddModal(true); }} className="bg-[#ff9f43] hover:bg-orange-500 text-white px-3 md:px-4 py-2 md:py-2.5 rounded-lg text-xs font-bold flex items-center gap-1.5 md:gap-2 transition shadow-sm">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg> <span className="hidden sm:inline">Add Product</span>
+              </button>
+            )}
+
             <a href="#/" className="bg-[#0f172a] hover:bg-gray-800 text-white px-3 md:px-4 py-2 md:py-2.5 rounded-lg text-xs font-bold flex items-center gap-1.5 md:gap-2 transition shadow-sm no-underline">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg> <span className="hidden sm:inline">POS</span>
             </a>
-            
+
             <div className="h-6 w-px bg-gray-200 hidden md:block"></div>
-            
+
             <div className="flex items-center gap-3 md:gap-4 text-gray-500">
               <div className="w-7 h-7 md:w-8 md:h-8 bg-[#ff9f43] rounded-full border-2 border-white shadow-sm flex items-center justify-center font-bold text-white text-[10px] md:text-xs uppercase cursor-pointer">A</div>
             </div>
@@ -389,19 +496,35 @@ export default function AdminView() {
             </div>
           )}
 
-          {/* ================= TAB 1: FULL DASHBOARD REPLICA ================= */}
+          {/* ================= TAB 1: FULL DASHBOARD ================= */}
           {activeTab === 'dashboard' && (
             <div className="flex flex-col gap-6 max-w-[1500px] mx-auto pb-10">
-              
-              {/* Header Title & Date Picker */}
+
+              {/* Header Title & CUSTOM Date Picker UI */}
               <div className="flex flex-col sm:flex-row justify-between sm:items-end gap-3 mb-2">
                 <div>
                   <h1 className="text-[24px] sm:text-[28px] font-bold text-[#0f172a] leading-tight">Welcome, Admin</h1>
-                  <p className="text-xs sm:text-sm text-gray-500 mt-0.5">You have <span className="text-[#ff9f43] font-bold">{cloudStats.orders}+ Orders</span> today</p>
+                  <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
+                    Viewing metrics for: <span className="text-[#ff9f43] font-bold">
+                    {timeFilter === '1D' ? 'Last 24 Hours' : timeFilter === '1W' ? 'Last 7 Days' : timeFilter === '1M' ? 'Last 30 Days' : timeFilter === '6M' ? 'Last 6 Months' : timeFilter === '1Y' ? 'Last 12 Months' : timeFilter === 'CUSTOM' ? 'Custom Date Range' : 'All Time History'}
+                    </span>
+                  </p>
                 </div>
-                <div className="bg-white border border-gray-200 text-gray-600 text-xs sm:text-[13px] font-medium px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg shadow-sm flex items-center justify-center gap-2 cursor-pointer hover:bg-gray-50 transition w-full sm:w-auto">
-                  <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                  01 Jan 2026 - 31 Dec 2026
+                <div className="bg-white border border-gray-200 text-gray-600 text-xs sm:text-[13px] font-medium px-2 sm:px-3 py-2 sm:py-2.5 rounded-lg shadow-sm flex items-center justify-center gap-1 sm:gap-2 transition w-full sm:w-auto">
+                  <svg className="w-4 h-4 text-gray-400 shrink-0 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                  <input 
+                    type="date" 
+                    value={startDate} 
+                    onChange={(e) => { setStartDate(e.target.value); setTimeFilter('CUSTOM'); }} 
+                    className="bg-transparent outline-none cursor-pointer w-[90px] sm:w-[110px]"
+                  />
+                  <span className="text-gray-300">-</span>
+                  <input 
+                    type="date" 
+                    value={endDate} 
+                    onChange={(e) => { setEndDate(e.target.value); setTimeFilter('CUSTOM'); }} 
+                    className="bg-transparent outline-none cursor-pointer w-[90px] sm:w-[110px]"
+                  />
                 </div>
               </div>
 
@@ -418,7 +541,7 @@ export default function AdminView() {
                 <div className="bg-[#ff9f43] rounded-[14px] p-5 sm:p-6 text-white flex items-center gap-4 shadow-[0_4px_15px_rgba(255,159,67,0.2)]">
                   <div className="bg-white/20 p-3 rounded-xl hidden sm:block"><svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg></div>
                   <div className="flex flex-col">
-                    <p className="text-[11px] sm:text-[12px] font-medium opacity-90 mb-1 tracking-wide">Total Cloud Sales</p>
+                    <p className="text-[11px] sm:text-[12px] font-medium opacity-90 mb-1 tracking-wide">Cloud Sales (Selected)</p>
                     <div className="flex items-center gap-2">
                       <h3 className="text-xl sm:text-[22px] font-extrabold truncate">{settings.currencySymbol}{cloudStats.gross.toLocaleString(undefined, {minimumFractionDigits:2})}</h3>
                       <span className="text-[9px] bg-white text-[#ff9f43] px-1.5 py-0.5 rounded font-black flex items-center shadow-sm shrink-0">↑ 22%</span>
@@ -429,7 +552,7 @@ export default function AdminView() {
                 <div className="bg-[#0f172a] rounded-[14px] p-5 sm:p-6 text-white flex items-center gap-4 shadow-[0_4px_15px_rgba(15,23,42,0.2)]">
                   <div className="bg-white/10 p-3 rounded-xl hidden sm:block"><svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path></svg></div>
                   <div className="flex flex-col">
-                    <p className="text-[11px] sm:text-[12px] font-medium opacity-90 mb-1 tracking-wide">Global Cloud Orders</p>
+                    <p className="text-[11px] sm:text-[12px] font-medium opacity-90 mb-1 tracking-wide">Cloud Orders (Selected)</p>
                     <div className="flex items-center gap-2">
                       <h3 className="text-xl sm:text-[22px] font-extrabold">{cloudStats.orders}</h3>
                       <span className="text-[9px] bg-white text-red-500 px-1.5 py-0.5 rounded font-black flex items-center shadow-sm shrink-0">↓ 5%</span>
@@ -440,7 +563,7 @@ export default function AdminView() {
                 <div className="bg-[#10b981] rounded-[14px] p-5 sm:p-6 text-white flex items-center gap-4 shadow-[0_4px_15px_rgba(16,185,129,0.2)]">
                   <div className="bg-white/20 p-3 rounded-xl hidden sm:block"><svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg></div>
                   <div className="flex flex-col">
-                    <p className="text-[11px] sm:text-[12px] font-medium opacity-90 mb-1 tracking-wide">Local Terminal Sales</p>
+                    <p className="text-[11px] sm:text-[12px] font-medium opacity-90 mb-1 tracking-wide">Local Terminal All-Time</p>
                     <div className="flex items-center gap-2">
                       <h3 className="text-xl sm:text-[22px] font-extrabold truncate">{settings.currencySymbol}{stats.gross.toLocaleString(undefined, {minimumFractionDigits:2})}</h3>
                       <span className="text-[9px] bg-white text-[#10b981] px-1.5 py-0.5 rounded font-black flex items-center shadow-sm shrink-0">↑ 12%</span>
@@ -451,7 +574,7 @@ export default function AdminView() {
                 <div className="bg-[#3b82f6] rounded-[14px] p-5 sm:p-6 text-white flex items-center gap-4 shadow-[0_4px_15px_rgba(59,130,246,0.2)]">
                   <div className="bg-white/20 p-3 rounded-xl hidden sm:block"><svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg></div>
                   <div className="flex flex-col">
-                    <p className="text-[11px] sm:text-[12px] font-medium opacity-90 mb-1 tracking-wide">Global Net Profit</p>
+                    <p className="text-[11px] sm:text-[12px] font-medium opacity-90 mb-1 tracking-wide">Net Profit (Selected)</p>
                     <div className="flex items-center gap-2">
                       <h3 className="text-xl sm:text-[22px] font-extrabold truncate">{settings.currencySymbol}{cloudStats.profit.toLocaleString(undefined, {minimumFractionDigits:2})}</h3>
                       <span className="text-[9px] bg-white text-[#3b82f6] px-1.5 py-0.5 rounded font-black flex items-center shadow-sm shrink-0">↑ 35%</span>
@@ -463,10 +586,10 @@ export default function AdminView() {
               {/* 4 White Sub-Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
                 {[
-                  { title: 'Avg Order Value', val: cloudStats.aov, iconBg: 'bg-cyan-50', iconCol: 'text-cyan-500', icon: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6', perc: '+35%', pCol: 'text-green-500' },
+                  { title: `Avg Order Value`, val: cloudStats.aov, iconBg: 'bg-cyan-50', iconCol: 'text-cyan-500', icon: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6', perc: '+35%', pCol: 'text-green-500' },
                   { title: 'Total Local Cost', val: stats.totalCost, iconBg: 'bg-emerald-50', iconCol: 'text-emerald-500', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', perc: '-19%', pCol: 'text-red-500' },
                   { title: 'Total Local Tax', val: stats.tax, iconBg: 'bg-orange-50', iconCol: 'text-orange-500', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z', perc: '+41%', pCol: 'text-green-500' },
-                  { title: 'Items Sold globally', val: cloudStats.itemsSold, prefix: 'none', iconBg: 'bg-purple-50', iconCol: 'text-purple-500', icon: 'M7 20l4-16m2 16l4-16M6 9h14M4 15h14', perc: '-20%', pCol: 'text-red-500' }
+                  { title: `Items Sold Selected`, val: cloudStats.itemsSold, prefix: 'none', iconBg: 'bg-purple-50', iconCol: 'text-purple-500', icon: 'M7 20l4-16m2 16l4-16M6 9h14M4 15h14', perc: '-20%', pCol: 'text-red-500' }
                 ].map((c, i) => (
                   <div key={i} className="bg-white rounded-[14px] p-4 sm:p-5 shadow-sm border border-gray-100 flex flex-col justify-between h-[130px] sm:h-[140px]">
                     <div className="flex justify-between items-start">
@@ -479,7 +602,7 @@ export default function AdminView() {
                       </div>
                     </div>
                     <div className="flex justify-between items-center mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-gray-50">
-                      <span className={`text-[10px] sm:text-[11px] font-bold ${c.pCol}`}>{c.perc} <span className="text-gray-400 font-medium">vs Last Month</span></span>
+                      <span className={`text-[10px] sm:text-[11px] font-bold ${c.pCol}`}>{c.perc} <span className="text-gray-400 font-medium">vs Last Period</span></span>
                       <button className="text-[10px] sm:text-[11px] font-bold text-gray-800 hover:text-[#ff9f43] transition border-b border-dashed border-gray-400 pb-0.5">View All</button>
                     </div>
                   </div>
@@ -488,52 +611,88 @@ export default function AdminView() {
 
               {/* Chart & Info Row */}
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                
-                {/* Simulated CSS Bar Chart */}
-                <div className="bg-white rounded-[14px] shadow-sm border border-gray-100 xl:col-span-2 p-4 sm:p-6 flex flex-col overflow-hidden">
-                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-6">
+
+                {/* ================= FIXED SALES & PURCHASE FLOW CHART ================= */}
+                <div className="bg-white rounded-[14px] shadow-sm border border-gray-100 xl:col-span-2 p-4 sm:p-6 flex flex-col">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 mb-4">
                     <h2 className="text-[14px] sm:text-[15px] font-bold text-gray-800 flex items-center gap-2">
                       <span className="text-[#ff9f43] bg-[#fff5ec] p-1.5 rounded-lg"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path></svg></span> 
                       Sales & Purchase Flow
                     </h2>
+                    
+                    {/* Time Filters */}
                     <div className="flex gap-1 text-[10px] sm:text-[11px] font-bold text-gray-500 bg-gray-50 p-1 rounded-lg border border-gray-100 overflow-x-auto scrollbar-none">
-                      <button className="px-2 sm:px-3 py-1 rounded hover:bg-white hover:shadow-sm transition">1D</button>
-                      <button className="px-2 sm:px-3 py-1 rounded hover:bg-white hover:shadow-sm transition">1W</button>
-                      <button className="px-2 sm:px-3 py-1 rounded hover:bg-white hover:shadow-sm transition">1M</button>
-                      <button className="px-2 sm:px-3 py-1 bg-[#ff9f43] text-white shadow-sm rounded">6M</button>
-                      <button className="px-2 sm:px-3 py-1 rounded hover:bg-white hover:shadow-sm transition">1Y</button>
+                      {['1D', '1W', '1M', '6M', '1Y', 'ALL'].map(tf => (
+                        <button key={tf} onClick={() => setTimeFilter(tf as any)} className={`px-2 sm:px-3 py-1 rounded transition shadow-sm ${timeFilter === tf ? 'bg-[#ff9f43] text-white' : 'hover:bg-white hover:text-gray-800'}`}>{tf}</button>
+                      ))}
                     </div>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-4 sm:gap-8 mb-6 sm:mb-8">
-                    <div className="border border-gray-100 rounded-lg p-3 bg-gray-50/50 w-full sm:w-40 flex-1 sm:flex-none">
+                  <div className="flex flex-row gap-4 sm:gap-8 mb-4">
+                    <div className="border border-gray-100 rounded-lg p-3 bg-gray-50/50 w-36 sm:w-40">
                       <p className="text-[10px] text-gray-400 font-bold uppercase flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-[#ffcdb2]"></span> Local Sales Vol</p>
                       <p className="text-lg sm:text-xl font-black text-gray-800">{stats.orders}</p>
                     </div>
-                    <div className="border border-gray-100 rounded-lg p-3 bg-gray-50/50 w-full sm:w-40 flex-1 sm:flex-none">
+                    <div className="border border-gray-100 rounded-lg p-3 bg-gray-50/50 w-36 sm:w-40">
                       <p className="text-[10px] text-gray-400 font-bold uppercase flex items-center gap-1.5 mb-1"><span className="w-2 h-2 rounded-full bg-[#ff9f43]"></span> Cloud Sales Vol</p>
                       <p className="text-lg sm:text-xl font-black text-gray-800">{cloudStats.orders}</p>
                     </div>
                   </div>
                   
-                  {/* Visual Bar Chart rendering daily cloud stats */}
-                  <div className="flex-1 flex items-end justify-between gap-1 sm:gap-2 h-32 sm:h-40 border-b border-gray-100 pb-2 relative mt-4 sm:mt-0 min-w-[300px] overflow-x-auto scrollbar-none pl-8 sm:pl-0">
-                    <div className="absolute left-0 sm:-left-6 top-0 bottom-0 flex flex-col justify-between text-[8px] sm:text-[9px] text-gray-400 font-medium py-2 z-10 bg-white sm:bg-transparent pr-1">
-                      <span>60K</span><span>40K</span><span>20K</span><span>0K</span>
+                  {/* REAL RESPONSIVE BAR CHART AREA */}
+                  <div className="h-52 sm:h-56 w-full flex flex-col justify-between relative mt-2 pl-7 pr-2">
+                    
+                    {/* Y-Axis Guidelines & Labels */}
+                    <div className="absolute left-0 top-0 bottom-6 w-full pointer-events-none flex flex-col justify-between">
+                      <div className="w-full border-b border-dashed border-gray-100 flex items-center">
+                        <span className="text-[9px] font-bold text-gray-400 -ml-7 w-6 text-right">{maxChartOrders}</span>
+                      </div>
+                      <div className="w-full border-b border-dashed border-gray-100 flex items-center">
+                        <span className="text-[9px] font-bold text-gray-400 -ml-7 w-6 text-right">{Math.round(maxChartOrders * 0.5)}</span>
+                      </div>
+                      <div className="w-full border-b border-gray-200 flex items-center">
+                        <span className="text-[9px] font-bold text-gray-400 -ml-7 w-6 text-right">0</span>
+                      </div>
                     </div>
-                    {cloudStats.daily.slice(-12).map(([date, d]: any, idx) => {
-                      const h1 = Math.min(100, Math.max(10, (d.orders * 5))); 
-                      const h2 = Math.min(100, Math.max(10, (d.gross / 100)));
-                      return (
-                        <div key={idx} className="flex flex-col items-center flex-1 group min-w-[20px] sm:min-w-0">
-                          <div className="w-4 sm:w-8 flex flex-col justify-end h-full relative cursor-pointer">
-                            <div className="w-full bg-[#ffcdb2] rounded-t-sm absolute bottom-0 transition-all group-hover:brightness-95" style={{height: `${h1}%`}}></div>
-                            <div className="w-full bg-[#ff9f43] rounded-t-sm absolute bottom-0 transition-all group-hover:brightness-90 shadow-sm" style={{height: `${h2}%`}}></div>
+
+                    {/* Columns Rendered with computed Heights */}
+                    <div className="w-full h-full flex items-end justify-between gap-1 sm:gap-2 pb-6 z-10">
+                      {chartList.map((d, idx) => {
+                        const localH = d.localOrders > 0 ? Math.max(10, Math.round((d.localOrders / maxChartOrders) * 100)) : 0;
+                        const cloudH = d.cloudOrders > 0 ? Math.max(10, Math.round((d.cloudOrders / maxChartOrders) * 100)) : 0;
+
+                        return (
+                          <div key={idx} className="flex-1 h-full flex flex-col justify-end items-center group relative min-w-[24px]">
+                            
+                            {/* Hover Tooltip */}
+                            <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-[9px] font-bold px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition pointer-events-none whitespace-nowrap z-30 shadow-lg">
+                              Cloud: {d.cloudOrders} (৳{d.cloudGross.toFixed(0)}) | Local: {d.localOrders}
+                            </div>
+
+                            {/* Bar Pair Track */}
+                            <div className="w-full flex-1 flex items-end justify-center gap-1 pb-1">
+                              {/* Local Sales Bar (Peach) */}
+                              <div 
+                                className="w-2 sm:w-3 bg-[#ffcdb2] hover:bg-[#fca582] rounded-t-sm transition-all duration-300"
+                                style={{ height: `${localH}%` }}
+                                title={`Local: ${d.localOrders} orders`}
+                              />
+                              {/* Cloud Sales Bar (Orange) */}
+                              <div 
+                                className="w-2 sm:w-3 bg-[#ff9f43] hover:bg-orange-600 rounded-t-sm transition-all duration-300 shadow-sm"
+                                style={{ height: `${cloudH}%` }}
+                                title={`Cloud: ${d.cloudOrders} orders`}
+                              />
+                            </div>
+
+                            {/* Date Label */}
+                            <span className="text-[9px] text-gray-400 font-bold shrink-0 mt-1 whitespace-nowrap">
+                              {d.label}
+                            </span>
                           </div>
-                          <span className="text-[8px] sm:text-[9px] text-gray-400 font-medium mt-2 sm:mt-3 whitespace-nowrap -ml-2 sm:ml-0">{date.split('/')[1]}/{date.split('/')[0]}</span>
-                        </div>
-                      )
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
 
@@ -593,15 +752,15 @@ export default function AdminView() {
 
               {/* Lists Row: Top Selling, Low Stock, Recent Sales */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                
+
                 {/* TOP SELLING PRODUCTS */}
                 <div className="bg-white rounded-[14px] shadow-sm border border-gray-100 p-4 sm:p-5 flex flex-col h-[300px] sm:h-[350px]">
                   <div className="flex justify-between items-center mb-4 border-b border-gray-50 pb-3">
                     <h2 className="text-[13px] sm:text-[14px] font-bold text-gray-800 flex items-center gap-2">
-                      <span className="text-pink-500 bg-pink-50 p-1.5 rounded-lg text-[10px] sm:text-xs">📦</span> Top Selling Products
+                      <span className="text-pink-500 bg-pink-50 p-1.5 rounded-lg text-[10px] sm:text-xs">📦</span> Top Selling ({timeFilter})
                     </h2>
                     <div className="text-[10px] sm:text-[11px] font-bold text-gray-500 border border-gray-200 px-2 py-1 rounded bg-gray-50 flex items-center gap-1 cursor-pointer">
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg> Today
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg> Sort
                     </div>
                   </div>
                   <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar flex flex-col gap-2 sm:gap-3">
@@ -624,11 +783,11 @@ export default function AdminView() {
                         </div>
                       )
                     })}
-                    {cloudStats.topItems.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No data yet.</p>}
+                    {cloudStats.topItems.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No data in this period.</p>}
                   </div>
                 </div>
 
-                {/* LOW STOCK PRODUCTS (Mocked from Menu Items) */}
+                {/* LOW STOCK PRODUCTS */}
                 <div className="bg-white rounded-[14px] shadow-sm border border-gray-100 p-4 sm:p-5 flex flex-col h-[300px] sm:h-[350px]">
                   <div className="flex justify-between items-center mb-4 border-b border-gray-50 pb-3">
                     <h2 className="text-[13px] sm:text-[14px] font-bold text-gray-800 flex items-center gap-2">
@@ -661,178 +820,69 @@ export default function AdminView() {
                   </div>
                 </div>
 
-                {/* RECENT SALES (Cloud Tickets Status) */}
+                {/* RECENT SALES */}
                 <div className="bg-white rounded-[14px] shadow-sm border border-gray-100 p-4 sm:p-5 flex flex-col h-[300px] sm:h-[350px]">
                   <div className="flex justify-between items-center mb-4 border-b border-gray-50 pb-3">
                     <h2 className="text-[13px] sm:text-[14px] font-bold text-gray-800 flex items-center gap-2">
-                      <span className="text-purple-500 bg-purple-50 p-1.5 rounded-lg text-[10px] sm:text-xs">📄</span> Recent Sales
+                      <span className="text-purple-500 bg-purple-50 p-1.5 rounded-lg text-[10px] sm:text-xs">📄</span> Transactions
                     </h2>
-                    <div className="text-[10px] sm:text-[11px] font-bold text-gray-500 border border-gray-200 px-2 py-1 rounded bg-gray-50 flex items-center gap-1 cursor-pointer">
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg> Weekly
-                    </div>
-                  </div>
-                  <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar flex flex-col gap-2 sm:gap-3">
-                    {cloudTickets.slice(0, 5).map((ticket) => {
-                      const isVoided = ticket.status === 'VOIDED';
-                      const firstItem = ticket.items?.[0]?.name || 'Custom Order';
-                      return (
-                        <div key={ticket.id} className="flex justify-between items-center bg-gray-50/50 hover:bg-gray-50 p-2 rounded-lg transition border border-transparent hover:border-gray-100">
-                          <div className="flex items-center gap-2 sm:gap-3 overflow-hidden">
-                            <div className="w-8 h-8 sm:w-10 sm:h-10 bg-white border border-gray-200 rounded-lg flex items-center justify-center shadow-sm shrink-0">
-                              <span className="text-[10px] sm:text-xs">{isVoided ? '🚫' : '🛍️'}</span>
-                            </div>
-                            <div className="flex flex-col overflow-hidden">
-                              <span className="text-[12px] sm:text-[13px] font-bold text-gray-800 truncate">{firstItem}</span>
-                              <span className="text-[10px] sm:text-[11px] text-gray-500 font-medium">Ticket: {settings.currencySymbol}{ticket.grossTotal?.toFixed(2)}</span>
-                            </div>
-                          </div>
-                          <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
-                            <span className="text-[8px] sm:text-[9px] font-bold text-gray-400">{ticket.createdAt ? new Date(ticket.createdAt).toLocaleDateString() : 'Today'}</span>
-                            <span className={`text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded font-black uppercase ${isVoided ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                              {isVoided ? '• Cancelled' : '• Completed'}
-                            </span>
-                          </div>
-                        </div>
-                      )
-                    })}
-                    {cloudTickets.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No sales recorded.</p>}
-                  </div>
-                </div>
-
-              </div>
-
-              {/* Bottom Charts Row */}
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                
-                {/* Sales Statics & Transactions */}
-                <div className="bg-white rounded-[14px] shadow-sm border border-gray-100 xl:col-span-2 flex flex-col lg:flex-row overflow-hidden min-h-[350px]">
-                  {/* Left Side: Sales Statics Chart */}
-                  <div className="flex-1 p-4 sm:p-6 border-b lg:border-b-0 lg:border-r border-gray-50 flex flex-col">
-                    <div className="flex justify-between items-center mb-4 sm:mb-6">
-                      <h2 className="text-[13px] sm:text-[14px] font-bold text-gray-800 flex items-center gap-2">
-                        <span className="text-red-500 bg-red-50 p-1.5 rounded-lg text-[10px] sm:text-xs">📉</span> Sales Statics
-                      </h2>
-                      <div className="text-[10px] sm:text-[11px] font-bold text-gray-500 border border-gray-200 px-2 py-1 rounded bg-gray-50 flex items-center gap-1 cursor-pointer">
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg> 2026
-                      </div>
-                    </div>
-                    <div className="flex gap-4 sm:gap-6 mb-6 sm:mb-8">
-                      <div>
-                        <h3 className="text-lg sm:text-xl font-black text-teal-500 flex items-center gap-2 flex-wrap">
-                          {settings.currencySymbol}{cloudStats.gross.toLocaleString(undefined, {minimumFractionDigits:0})} 
-                          <span className="text-[8px] sm:text-[9px] bg-teal-100 text-teal-700 px-1 py-0.5 rounded">↗ 25%</span>
-                        </h3>
-                        <p className="text-[10px] sm:text-[11px] text-gray-400 font-bold mt-1">Revenue</p>
-                      </div>
-                      <div>
-                        <h3 className="text-lg sm:text-xl font-black text-orange-500 flex items-center gap-2 flex-wrap">
-                          {settings.currencySymbol}{cloudStats.totalCost.toLocaleString(undefined, {minimumFractionDigits:0})} 
-                          <span className="text-[8px] sm:text-[9px] bg-red-100 text-red-700 px-1 py-0.5 rounded">↘ 25%</span>
-                        </h3>
-                        <p className="text-[10px] sm:text-[11px] text-gray-400 font-bold mt-1">Expense</p>
-                      </div>
-                    </div>
-                    {/* Mock Dual Bar Chart */}
-                    <div className="flex-1 flex items-center justify-between gap-1 h-32 relative pt-2 min-w-[250px] overflow-x-auto scrollbar-none">
-                      <div className="absolute left-0 top-0 bottom-0 flex flex-col justify-between text-[8px] sm:text-[9px] text-gray-400 font-medium h-full bg-white pr-1 z-10">
-                        <span>30K</span><span>20K</span><span>10K</span><span>0K</span><span>-10K</span><span>-20K</span>
-                      </div>
-                      {cloudStats.daily.slice(-8).map(([d, val]: any, i) => (
-                        <div key={i} className="flex flex-col items-center justify-center h-full gap-0.5 sm:gap-1 ml-6 sm:ml-4 group shrink-0">
-                          <div className="w-2 sm:w-3 bg-teal-500 rounded-sm transition-all group-hover:bg-teal-400" style={{height: `${Math.max(10, (val.gross/100))}%`}}></div>
-                          <div className="w-2 sm:w-3 bg-orange-500 rounded-sm transition-all group-hover:bg-orange-400" style={{height: `${Math.max(10, (val.cost/100))}%`}}></div>
-                          <span className="text-[8px] sm:text-[9px] text-gray-400 mt-2 absolute -bottom-5 opacity-0 group-hover:opacity-100 transition">{d.split('/')[0]}</span>
-                        </div>
-                      ))}
-                    </div>
                   </div>
                   
-                  {/* Right Side: Recent Transactions Table with Void Button */}
-                  <div className="flex-1 p-4 sm:p-6 flex flex-col w-full overflow-hidden">
-                    <div className="flex justify-between items-center mb-4">
-                      <h2 className="text-[13px] sm:text-[14px] font-bold text-gray-800 flex items-center gap-2">
-                        <span className="text-orange-500 bg-orange-50 p-1.5 rounded-lg text-[10px] sm:text-xs">📜</span> Recent Transactions
-                      </h2>
-                      <span className="text-[10px] sm:text-[11px] font-bold text-gray-800 hover:text-[#ff9f43] transition cursor-pointer underline decoration-gray-300">View All</span>
-                    </div>
-                    <div className="flex gap-3 sm:gap-4 border-b border-gray-100 pb-2 mb-3 overflow-x-auto scrollbar-none">
-                      <button className="text-[10px] sm:text-[11px] font-bold text-orange-500 border-b-2 border-orange-500 pb-1 whitespace-nowrap">Sale</button>
-                      <button className="text-[10px] sm:text-[11px] font-bold text-gray-400 hover:text-gray-600 transition whitespace-nowrap">Purchase</button>
-                      <button className="text-[10px] sm:text-[11px] font-bold text-gray-400 hover:text-gray-600 transition whitespace-nowrap">Quotation</button>
-                    </div>
-                    
-                    <div className="flex-1 overflow-auto custom-scrollbar -mr-2 pr-2">
-                      <table className="w-full text-left min-w-[300px]">
-                        <thead>
-                          <tr className="text-[9px] sm:text-[10px] text-gray-400 uppercase tracking-wider">
-                            <th className="pb-2 sm:pb-3 font-bold">Date/Source</th><th className="pb-2 sm:pb-3 font-bold text-center">Status</th><th className="pb-2 sm:pb-3 font-bold text-right">Total</th>
-                          </tr>
-                        </thead>
-                        <tbody className="text-[10px] sm:text-xs">
-                          {cloudTickets.slice(0, 5).map(t => {
-                            const isVoid = t.status === 'VOIDED';
-                            return(
-                            <tr key={t.id} className={`border-b border-gray-50 last:border-0 transition ${isVoid?'bg-red-50/40':'hover:bg-gray-50'}`}>
-                              <td className="py-2">
-                                <span className="block font-bold text-gray-800 truncate max-w-[80px] sm:max-w-[120px]">{t.createdAt ? new Date(t.createdAt).toLocaleDateString() : ''}</span>
-                                <span className="text-[9px] sm:text-[10px] text-gray-500 font-medium">#{t.ticketId?.slice(-6) || t.id.slice(-6)}</span>
-                              </td>
-                              <td className="py-2 text-center">
-                                {!isVoid ? (
-                                  <div className="flex flex-col items-center gap-1">
-                                    <span className="text-[8px] sm:text-[9px] bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded font-black uppercase inline-block">• Completed</span>
-                                    <button onClick={() => handleVoidCloudTicket(t.id, t.ticketId)} className="text-[8px] sm:text-[9px] bg-white border border-red-200 text-red-500 hover:bg-red-50 px-2 py-0.5 rounded font-bold transition shadow-sm">Void</button>
-                                  </div>
-                                ) : (
-                                  <span className="text-[8px] sm:text-[9px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-black uppercase inline-block">• Cancelled</span>
-                                )}
-                              </td>
-                              <td className={`py-2 text-right font-black ${isVoid?'text-gray-400 line-through':'text-gray-800'}`}>
-                                {settings.currencySymbol}{t.grossTotal?.toFixed(2)}
-                              </td>
-                            </tr>
-                          )})}
-                        </tbody>
-                      </table>
-                    </div>
+                  <div className="flex gap-3 sm:gap-4 border-b border-gray-100 pb-2 mb-3 overflow-x-auto scrollbar-none">
+                    {['Sale', 'Purchase', 'Quotation'].map(tab => (
+                      <button key={tab} onClick={() => setTransactionTab(tab as any)} className={`text-[10px] sm:text-[11px] font-bold whitespace-nowrap pb-1 transition ${transactionTab === tab ? 'text-orange-500 border-b-2 border-orange-500' : 'text-gray-400 hover:text-gray-600'}`}>
+                        {tab}
+                      </button>
+                    ))}
                   </div>
-                </div>
 
-                {/* Top Categories Donut & Order Stats Grid */}
-                <div className="flex flex-col gap-6">
-                  {/* Category Donut */}
-                  <div className="bg-white rounded-[14px] shadow-sm border border-gray-100 p-4 sm:p-6 flex-1 flex flex-col">
-                    <div className="flex justify-between items-center mb-4 sm:mb-6">
-                      <h2 className="text-[13px] sm:text-[14px] font-bold text-gray-800 flex items-center gap-2">
-                        <span className="text-pink-500 bg-pink-50 p-1.5 rounded-lg text-[10px] sm:text-xs">📊</span> Top Categories
-                      </h2>
-                      <div className="text-[10px] sm:text-[11px] font-bold text-gray-500 border border-gray-200 px-2 py-1 rounded bg-gray-50 flex items-center gap-1 cursor-pointer">
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg> Weekly
-                      </div>
-                    </div>
-                    <div className="flex flex-row items-center gap-4 sm:gap-6 flex-1 justify-center sm:justify-start">
-                      {/* CSS Donut representation for Categories */}
-                      <div className="relative w-20 h-20 sm:w-28 sm:h-28 rounded-full flex items-center justify-center shadow-sm shrink-0" style={{background: 'conic-gradient(#ff9f43 0% 45%, #1e293b 45% 75%, #10b981 75% 100%)'}}>
-                        <div className="w-12 h-12 sm:w-16 sm:h-16 bg-white rounded-full"></div>
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        {cloudStats.categories.slice(0,3).map(([cName, cQty]: any, i) => (
-                          <div key={i} className="flex flex-col">
-                            <span className="text-[9px] sm:text-[10px] text-gray-500 font-bold uppercase flex items-center gap-1.5 truncate max-w-[100px] sm:max-w-[120px]"><span className={`w-2 h-2 shrink-0 rounded-full ${i===0?'bg-[#ff9f43]':i===1?'bg-[#1e293b]':'bg-[#10b981]'}`}></span> {cName}</span>
-                            <span className="text-[11px] sm:text-[13px] font-black text-gray-800 pl-3.5">{cQty} Sales</span>
+                  <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar flex flex-col gap-2 sm:gap-3">
+                    {transactionTab !== 'Sale' ? (
+                      <p className="text-xs text-gray-400 text-center py-4">No {transactionTab.toLowerCase()}s recorded.</p>
+                    ) : (
+                      filteredCloudTickets.slice(0, 5).map((ticket) => {
+                        const isVoided = ticket.status === 'VOIDED';
+                        const firstItem = ticket.items?.[0]?.name || 'Custom Order';
+                        return (
+                          <div key={ticket.id} className="flex justify-between items-center bg-gray-50/50 hover:bg-gray-50 p-2 rounded-lg transition border border-transparent hover:border-gray-100">
+                            <div className="flex items-center gap-2 sm:gap-3 overflow-hidden">
+                              <div className="w-8 h-8 sm:w-10 sm:h-10 bg-white border border-gray-200 rounded-lg flex items-center justify-center shadow-sm shrink-0">
+                                <span className="text-[10px] sm:text-xs">{isVoided ? '🚫' : '🛍️'}</span>
+                              </div>
+                              <div className="flex flex-col overflow-hidden">
+                                <span className="text-[12px] sm:text-[13px] font-bold text-gray-800 truncate">{firstItem}</span>
+                                <span className="text-[10px] sm:text-[11px] text-gray-500 font-medium">Ticket: {settings.currencySymbol}{ticket.grossTotal?.toFixed(2)}</span>
+                              </div>
+                            </div>
+                            <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
+                              <span className="text-[8px] sm:text-[9px] font-bold text-gray-400">{ticket.createdAt ? new Date(ticket.createdAt).toLocaleDateString() : 'Today'}</span>
+                              {!isVoided ? (
+                                <div className="flex flex-col items-end gap-1">
+                                  <span className="text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded font-black uppercase bg-emerald-100 text-emerald-600">
+                                    • Completed
+                                  </span>
+                                  <button 
+                                    onClick={() => handleVoidCloudTicket(ticket.id, ticket.ticketId)} 
+                                    className="text-[8px] bg-white border border-red-200 text-red-500 hover:bg-red-50 px-2 py-0.5 rounded font-bold transition shadow-sm w-full text-center"
+                                  >
+                                    Void
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded font-black uppercase bg-red-100 text-red-600">
+                                  • Cancelled
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="border-t border-gray-100 pt-3 mt-4 flex flex-col gap-1.5 text-[10px] sm:text-[11px] font-bold text-gray-600">
-                      <div className="flex justify-between items-center"><span>• Total Categories</span><span className="font-black text-gray-800">{categoryList.length}</span></div>
-                      <div className="flex justify-between items-center"><span>• Total Products</span><span className="font-black text-gray-800">{menuItems.length}</span></div>
-                    </div>
+                        )
+                      })
+                    )}
+                    {transactionTab === 'Sale' && filteredCloudTickets.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No sales recorded.</p>}
                   </div>
                 </div>
 
               </div>
-
             </div>
           )}
 
@@ -851,7 +901,7 @@ export default function AdminView() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50 text-xs sm:text-sm font-semibold">
-                    {menuItems.map((item) => (
+                    {searchedProducts.map((item) => (
                       <tr key={item.productId} className="hover:bg-gray-50">
                         <td className="py-2 sm:py-3 px-2 flex items-center gap-2 sm:gap-3">
                           <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg bg-gray-100 overflow-hidden shrink-0 flex items-center justify-center text-[10px] sm:text-xs border border-gray-200">{item.image ? <img src={item.image} className="w-full h-full object-cover"/> : "☕"}</div>
@@ -865,6 +915,7 @@ export default function AdminView() {
                         </td>
                       </tr>
                     ))}
+                    {searchedProducts.length === 0 && <tr><td colSpan={4} className="text-center py-6 text-gray-400 font-medium">No products found.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -891,8 +942,8 @@ export default function AdminView() {
                      </tr>
                    </thead>
                    <tbody className="divide-y divide-gray-50 text-[10px] sm:text-xs">
-                     {tickets.length === 0 ? <tr><td colSpan={4} className="text-center py-6 text-gray-400 font-medium">No tickets found on this device.</td></tr> : 
-                       tickets.map(ticket => (
+                     {searchedTickets.length === 0 ? <tr><td colSpan={4} className="text-center py-6 text-gray-400 font-medium">No tickets found on this device.</td></tr> : 
+                       searchedTickets.map(ticket => (
                        <tr key={ticket.ticketId} className="hover:bg-gray-50">
                          <td className="py-2 sm:py-3 px-2">
                            <span className="font-mono text-[10px] sm:text-[11px] font-bold text-gray-700 block max-w-[120px] sm:max-w-[180px] truncate">{ticket.ticketId}</span>
@@ -934,7 +985,7 @@ export default function AdminView() {
               <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-gray-100 h-full max-h-[500px] flex flex-col">
                  <h2 className="text-base sm:text-lg font-bold text-gray-800 mb-4 sm:mb-6 shrink-0">Active Staff Directory</h2>
                  <div className="flex flex-col gap-2 sm:gap-3 flex-1 overflow-y-auto custom-scrollbar pr-1">
-                    {users.map(u => (
+                    {searchedUsers.map(u => (
                       <div key={u.userId} className="bg-gray-50 p-3 sm:p-4 rounded-lg border border-gray-100 flex justify-between items-center">
                         <div className="flex flex-col">
                           <span className="font-bold text-gray-800 text-[13px] sm:text-sm">{u.username}</span>
@@ -943,6 +994,7 @@ export default function AdminView() {
                         <button onClick={() => handleDeleteUser(u.userId, u.role)} className="bg-white border border-gray-200 hover:border-red-500 text-red-500 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg font-bold text-[10px] sm:text-xs transition shadow-sm">Remove</button>
                       </div>
                     ))}
+                    {searchedUsers.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No users found.</p>}
                  </div>
               </div>
             </div>
